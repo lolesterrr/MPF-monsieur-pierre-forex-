@@ -199,6 +199,15 @@ Undecided. Two candidates, both from TradingView:
 
 The Python layer here is chart-agnostic, so this can be decided late.
 
+## Using it
+
+`docs/HOWTO.md` walks five real sessions — the clean one, the trap, the skip,
+the stale one, and the right-idea-wrong-moment. Start there.
+
+The short version: the score tells you where to look, your eyes decide.
+Clicking a confluence marks the exact candle, so you never deduce it from
+price levels.
+
 ## Backtest
 
 ```bash

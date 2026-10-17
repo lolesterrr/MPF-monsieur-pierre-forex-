@@ -50,6 +50,7 @@ def _confluence_list(bias, crt, plp, aligned, target, model1,
     if crt:
         items.append({
             "id": "crt", "label": f"CRT on {crt.timeframe.value}",
+            "short": "CRT C3",
             "detail": f"{crt.direction.value}, range "
                       f"{crt.range_low:.5f}–{crt.range_high:.5f}",
             "tf": crt.timeframe.value, "price": crt.eq, "ts": crt.c3_ts,
@@ -59,6 +60,7 @@ def _confluence_list(bias, crt, plp, aligned, target, model1,
     if plp:
         items.append({
             "id": "plp", "label": f"PLP on {plp.timeframe.value}",
+            "short": "PLP",
             "detail": f"{plp.price:.5f}, "
                       f"{'taken' if plp.is_taken else 'still resting'}",
             "tf": plp.timeframe.value, "price": plp.price, "ts": plp.swing_ts,
@@ -68,6 +70,8 @@ def _confluence_list(bias, crt, plp, aligned, target, model1,
     for i, l in enumerate(aligned or []):
         items.append({
             "id": f"align{i}",
+            "short": (l.type.value.replace("_", " ")
+                      if not isinstance(l, dict) else l["type"]),
             "label": f"{l.tf if isinstance(l, dict) else l.timeframe.value} "
                      f"{(l['type'] if isinstance(l, dict) else l.type.value).replace('_',' ')}",
             "detail": "sits within 5 pips of the PLP",
@@ -78,6 +82,7 @@ def _confluence_list(bias, crt, plp, aligned, target, model1,
     if target:
         items.append({
             "id": "target", "label": f"Target: {target.type.value.replace('_',' ')}",
+            "short": "target",
             "detail": f"{target.mid:.5f}, on the {zone} side of 50%",
             "tf": target.timeframe.value, "price": target.mid,
             "ts": target.created_ts, "kind": "target",
@@ -86,6 +91,7 @@ def _confluence_list(bias, crt, plp, aligned, target, model1,
     if model1:
         items.append({
             "id": "model1", "label": "Model #1 trigger",
+            "short": "entry",
             "detail": f"entry {model1.entry:.5f}, stop {model1.stop:.5f}",
             "tf": model1.timeframe.value, "price": model1.entry,
             "ts": model1.candle_ts, "kind": "model1",
@@ -94,6 +100,7 @@ def _confluence_list(bias, crt, plp, aligned, target, model1,
     if asia:
         items.append({
             "id": "asia", "label": "Asian range",
+            "short": "asia",
             "detail": f"{asia.low:.5f}–{asia.high:.5f} ({asia.size_pips:.0f} pips)",
             "tf": "15m", "price": asia.eq, "ts": asia.end_ts, "kind": "asia",
         })

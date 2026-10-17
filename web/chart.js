@@ -9,7 +9,7 @@
 const Chart = (() => {
   const LWC = () => window.LightweightCharts;
 
-  let chart = null, candles = null, zonePrim = null, el = null;
+  let chart = null, candles = null, zonePrim = null, el = null, markers = null;
   let priceLines = [];
   let state = {
     zones: [], asia: null, colors: {},
@@ -95,6 +95,26 @@ const Chart = (() => {
               ctx.fillText(z.label, 6 * hx, y * vy);
             });
 
+            // The focused candle gets a column behind it. Price lines alone
+            // meant counting bars by eye to find WHICH candle was meant.
+            if (state.focus && state.focus.ts) {
+              const fx = ts.timeToCoordinate(state.focus.ts);
+              if (fx != null) {
+                const bw = Math.max(6, ts.options().barSpacing || 8) * hx;
+                const cx = fx * hx;
+                ctx.fillStyle = state.focus.fill;
+                ctx.fillRect(cx - bw / 2, 0, bw, scope.bitmapSize.height);
+                ctx.strokeStyle = state.focus.stroke;
+                ctx.lineWidth = Math.max(1, hx);
+                ctx.beginPath();
+                ctx.moveTo(cx - bw / 2, 0);
+                ctx.lineTo(cx - bw / 2, scope.bitmapSize.height);
+                ctx.moveTo(cx + bw / 2, 0);
+                ctx.lineTo(cx + bw / 2, scope.bitmapSize.height);
+                ctx.stroke();
+              }
+            }
+
             if (state.asia) {
               const a = state.asia;
               draw(a.top, a.bottom, a.ts, "transparent", state.colors.soft, true);
@@ -158,6 +178,9 @@ const Chart = (() => {
 
     zonePrim = makeZonePrimitive();
     candles.attachPrimitive(zonePrim);
+
+    // v5 moved markers off the series onto a plugin.
+    markers = LWC().createSeriesMarkers(candles, []);
     return chart;
   }
 
@@ -280,30 +303,73 @@ const Chart = (() => {
   }
 
   /** Scroll to a moment and flash a line at a price — "go and look at this". */
-  function goTo(tf, ts, price) {
-    if (!state.data) return;
+  /* Jump to a confluence AND make it obvious which candle it is.
+     Three cues, because one was not enough: a labelled marker on the bar, a
+     highlighted column behind it, and the bar's OHLC handed back for the
+     readout. A price line alone meant counting bars by eye. */
+  function goTo(tf, ts, price, label) {
+    if (!state.data) return null;
     if (tf && tf !== state.tf) setTimeframe(tf);
 
-    const ts2 = chart.timeScale();
+    const api = chart.timeScale();
     const bars = (state.data.candles || {})[state.tf] || [];
-    if (ts && bars.length) {
-      const i = bars.findIndex(b => b.t >= ts);
-      if (i >= 0) {
-        const pad = Math.max(20, Math.round(bars.length * 0.12));
-        ts2.setVisibleLogicalRange({ from: i - pad, to: i + pad });
-      }
+    if (!bars.length) return null;
+
+    // Snap to the bar CONTAINING ts, not the next one after it.
+    let idx = 0;
+    if (ts) {
+      idx = bars.findIndex(b => b.t >= ts);
+      if (idx < 0) idx = bars.length - 1;
+      if (idx > 0 && bars[idx].t > ts) idx -= 1;
+    }
+    const bar = bars[idx];
+
+    const pad = Math.max(14, Math.round(bars.length * 0.10));
+    api.setVisibleLogicalRange({ from: idx - pad, to: idx + pad });
+
+    const c = state.colors;
+    state.focus = {
+      ts: bar.t,
+      fill: rgba(c.crown, 0.13),
+      stroke: rgba(c.crown, 0.8),
+    };
+
+    // Put the marker on the side away from the level, so it never covers
+    // the candle it is pointing at.
+    const above = price != null ? price >= bar.c : true;
+    if (markers) {
+      markers.setMarkers([{
+        time: bar.t,
+        position: above ? "aboveBar" : "belowBar",
+        shape: above ? "arrowDown" : "arrowUp",
+        color: c.crown,
+        text: label || "here",
+      }]);
     }
 
+    if (state.flash) { try { candles.removePriceLine(state.flash); } catch (_) {} }
+    state.flash = null;
     if (price != null) {
-      const flash = candles.createPriceLine({
-        price, color: state.colors.wattle || "#ff7a62",
-        lineWidth: 3, lineStyle: LWC().LineStyle.Solid,
-        axisLabelVisible: true, title: "here",
+      state.flash = candles.createPriceLine({
+        price, color: c.wattle, lineWidth: 2,
+        lineStyle: LWC().LineStyle.Solid,
+        axisLabelVisible: true, axisLabelColor: c.wattle,
+        axisLabelTextColor: c.panel, title: label || "here",
       });
-      setTimeout(() => { try { candles.removePriceLine(flash); } catch (_) {} }, 2600);
+    }
+
+    return { bar, index: idx, tf: state.tf };
+  }
+
+  function clearFocus() {
+    state.focus = null;
+    if (markers) markers.setMarkers([]);
+    if (state.flash) {
+      try { candles.removePriceLine(state.flash); } catch (_) {}
+      state.flash = null;
     }
   }
 
   return { mount, render, theme, subscribeCrosshair, setTimeframe, toggle,
-           goTo, tf: () => state.tf, series: () => candles };
+           goTo, clearFocus, tf: () => state.tf, series: () => candles };
 })();

@@ -197,6 +197,22 @@ button.ghost.sm { font-size: 12px; padding: 2px 8px; }
 }
 .toggles input { accent-color: var(--crown-deep); }
 
+.focusbar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 8px 12px; border-bottom: 2px solid var(--tone);
+  background: rgb(243 179 36 / 0.08); font-size: 13.5px;
+}
+.focusbar .fk {
+  font-family: var(--f-pixel); font-size: 12px; padding: 2px 7px;
+  border: 2px solid var(--crown-deep); color: var(--crown-deep);
+}
+.focusbar .fv { font-family: var(--f-pixel); font-size: 12.5px; }
+.focusbar .fv .n { color: var(--ink-soft); }
+.focusbar .fo { font-variant-numeric: tabular-nums; color: var(--ink-soft); }
+.focusbar .fp { font-variant-numeric: tabular-nums; color: var(--wattle); }
+.focusbar button { margin-left: auto; }
+.conf button.active { background: rgb(243 179 36 / 0.1); outline: 2px solid var(--crown-deep); outline-offset: -2px; }
+
 .chartwrap { position: relative; }
 #chart { width: 100%; height: 460px; }
 .legend {
@@ -334,6 +350,7 @@ footer {
       <div class="tfs" id="tfs"></div>
       <div class="toggles" id="toggles"></div>
     </div>
+    <div class="focusbar" id="focus" hidden></div>
     <div class="chartwrap">
       <div id="chart"></div>
       <div class="readout" id="readout"></div>
@@ -504,7 +521,7 @@ function render(d) {
   const items = d.confluences || [];
   $("#conf").innerHTML = items.length
     ? items.map(c => `<li class="${c.kind}">
-        <button data-tf="${c.tf}" data-ts="${c.ts}" data-price="${c.price}">
+        <button data-tf="${c.tf}" data-ts="${c.ts}" data-price="${c.price}" data-short="${(c.short || c.label || "").replace(/"/g, "")}">
           <span class="tf">${c.tf}</span>
           <span><span class="lbl">${c.label}</span><br>
                 <span class="det">${c.detail}</span></span>
@@ -516,8 +533,14 @@ function render(d) {
   $("#conf").onclick = e => {
     const b = e.target.closest("button");
     if (!b) return;
-    Chart.goTo(b.dataset.tf, Number(b.dataset.ts), Number(b.dataset.price));
+
+    [...$("#conf").querySelectorAll("button")].forEach(
+      x => x.classList.toggle("active", x === b));
+
+    const hit = Chart.goTo(b.dataset.tf, Number(b.dataset.ts),
+                           Number(b.dataset.price), b.dataset.short || "here");
     syncTabs();
+    showFocus(b, hit);
     document.querySelector(".chartwrap").scrollIntoView(
       { behavior: "smooth", block: "center" });
   };
@@ -664,6 +687,35 @@ function renderBacktest(d) {
       : "") +
     `<p class="btcav">${d.caveat} Costs charged: ${d.fills.spread_pips} pip spread
      + ${d.fills.slippage_pips} slippage, both ways. ${d.bars || "?"} bars.</p>`;
+}
+
+/* Naming the candle in words. The marker and the column say WHICH bar;
+   this says what that bar actually is, so there is no counting involved. */
+function showFocus(btn, hit) {
+  const box = $("#focus");
+  if (!hit || !hit.bar) { box.hidden = true; return; }
+  const b = hit.bar;
+  const when = new Date(b.t * 1000);
+  const stamp = when.toISOString().slice(0, 16).replace("T", " ") + "Z";
+  const local = when.toLocaleString(undefined,
+    { weekday: "short", hour: "2-digit", minute: "2-digit" });
+  const px = Number(btn.dataset.price);
+
+  box.hidden = false;
+  box.innerHTML =
+    `<span class="fk">${btn.dataset.short || "level"}</span>` +
+    `<span class="fv">${hit.tf} candle · ${stamp} <span class="n">(${local} your time)</span></span>` +
+    `<span class="fo">O ${b.o.toFixed(5)} H ${b.h.toFixed(5)} ` +
+    `L ${b.l.toFixed(5)} C ${b.c.toFixed(5)}</span>` +
+    (isFinite(px) ? `<span class="fp">level at ${px.toFixed(5)}</span>` : "") +
+    `<button class="ghost sm" id="unfocus">clear</button>`;
+
+  $("#unfocus").onclick = () => {
+    Chart.clearFocus();
+    box.hidden = true;
+    [...$("#conf").querySelectorAll("button")].forEach(
+      x => x.classList.remove("active"));
+  };
 }
 
 function kv(pairs) {
