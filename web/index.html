@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CRT Confluence — EURUSD</title>
+<title>MPF — Monsieur Pierre’s Forex</title>
 <meta name="theme-color" content="#0b0f1d">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -205,14 +205,15 @@ footer {
 
 <header>
   <div>
-    <h1>CRT Confluence</h1>
-    <p class="sub">EURUSD · top-down · <span id="stamp">—</span></p>
+    <h1>MPF</h1>
+    <p class="sub">monsieur pierre’s forex · <span id="stamp">—</span></p>
   </div>
   <div class="spacer"></div>
   <div class="picker">
     <select id="symbol" aria-label="instrument"><option>EURUSD</option></select>
     <select id="tf" aria-label="timeframe"><option>5m</option></select>
     <button class="ghost" id="go">load</button>
+    <button class="ghost" id="key" title="API key for a deployed instance">key</button>
     <button class="ghost" id="theme">theme</button>
   </div>
 </header>
@@ -297,8 +298,9 @@ footer {
 </div>
 
 <footer>
-  Detection only. A confluence count is not an edge until it survives data it was
-  never tuned on. Weights in RULEBOOK §10 are placeholders.
+  MPF · detection only. A confluence count is not an edge until it survives data
+  it was never tuned on. Weights in RULEBOOK §10 are placeholders. Not an exchange,
+  not a broker, places no orders.
 </footer>
 
 <div id="pierre" hidden></div>
@@ -544,6 +546,38 @@ function fail(msg) {
 try { Chart.mount($("#chart")); }
 catch (e) { fail("Chart library didn't load — check vendor/ and reload. (" + e.message + ")"); }
 
+/* API key. Only needed on a deployed instance — a local run is open to
+   localhost and never asks. Stored per-browser, never sent anywhere but
+   this app's own origin. */
+const KEY = {
+  get: () => { try { return localStorage.getItem("mpf-key") || ""; } catch (_) { return ""; } },
+  set: v => { try { v ? localStorage.setItem("mpf-key", v) : localStorage.removeItem("mpf-key"); } catch (_) {} },
+};
+
+function askForKey(msg) {
+  const k = prompt((msg || "This MPF instance is protected.")
+    + "\n\nPaste the MPF_TOKEN you set on the host:");
+  if (k === null) return false;
+  KEY.set(k.trim());
+  return true;
+}
+
+/* Every API call goes through here so the key is never forgotten on one
+   of them — that was a real bug: the catalogue fetch skipped it. */
+function api(path) {
+  return fetch(path, { headers: KEY.get() ? { "X-MPF-Token": KEY.get() } : {} })
+    .then(async r => {
+      const j = await r.json().catch(() => null);
+      if (r.status === 401) {
+        const e = new Error((j && j.error) || "Unauthorized");
+        e.auth = true;
+        throw e;
+      }
+      if (!r.ok) throw new Error((j && j.error) || ("HTTP " + r.status));
+      return j;
+    });
+}
+
 let loading = false;
 function load(params) {
   if (loading) return;
@@ -555,14 +589,19 @@ function load(params) {
   // it falls back to the JSON the CLI wrote.
   const url = SERVED ? ("/api/analyze?" + new URLSearchParams(params)) : "data.json";
 
-  fetch(url)
-    .then(async r => {
-      const j = await r.json().catch(() => null);
-      if (!r.ok) throw new Error((j && j.error) || ("HTTP " + r.status));
-      return j;
-    })
+  api(url)
     .then(d => { render(d); wireCrosshair(d); })
-    .catch(err => fail(err.message))
+    .catch(err => {
+      if (err.auth) {
+        fail(err.message + "  Click 'key' to enter it.");
+        if (!KEY.get() && askForKey(err.message)) {
+          loading = false;
+          return load(params);
+        }
+      } else {
+        fail(err.message);
+      }
+    })
     .finally(() => { loading = false; $("#go").disabled = false; $("#go").textContent = "load"; });
 }
 
@@ -575,8 +614,7 @@ function boot() {
     return load({});
   }
 
-  fetch("/api/catalogue")
-    .then(r => r.json())
+  api("/api/catalogue")
     .then(cat => {
       const sym = $("#symbol"), tf = $("#tf");
       sym.innerHTML = Object.entries(cat.instruments)
@@ -592,7 +630,17 @@ function boot() {
       tf.onchange = go;
       go();
     })
-    .catch(err => { fail("Server unreachable: " + err.message); load({}); });
+    .catch(err => {
+      if (err.auth) {
+        fail(err.message + "  Click 'key' to enter it.");
+        if (askForKey(err.message)) return boot();   // retry once with the key
+        return;
+      }
+      fail("Server unreachable: " + err.message);
+      load({});
+    });
+
+  $("#key").onclick = () => { if (askForKey("Set the API key for this instance.")) boot(); };
 }
 
 boot();

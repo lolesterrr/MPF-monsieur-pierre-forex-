@@ -1,6 +1,9 @@
-# crt-confluence
+# MPF — Monsieur Pierre's Forex
 
 Multi-timeframe confluence tooling for the EURUSD CRT / Asian Range strategy.
+
+Not an exchange and not a broker. It reads candles and draws levels; it places
+no orders and holds no money.
 
 The point: make higher-timeframe → lower-timeframe analysis legible at a glance,
 instead of flipping through six charts and holding it all in your head.
@@ -25,6 +28,11 @@ src/core/             types, bias, sessions, confluence engine
 src/detectors/        swings, levels (FVG + OB), CRT, Model #1
 src/data/feed.py      CSV loader, resampler, synthetic generator
 src/pipeline.py       runs the full pass, writes web/data.json
+src/data/providers.py one interface, several vendors
+src/wsgi.py           the web app (local / Vercel / Render)
+app.py                deploy entrypoint
+docs/OANDA.md         getting a free token, step by step
+docs/DEPLOY.md        hosting, and where keys must never go
 web/index.html        the dashboard
 web/chart.js          Lightweight Charts wiring + the zone primitive
 web/vendor/           Lightweight Charts v5 (Apache 2.0) + its licence
@@ -79,15 +87,20 @@ account is a real feed with no catch, and that is the recommended path.
 **Web (the normal way).** Instrument and timeframe pickers, live fetch:
 
 ```bash
-python3 -m src.server            # http://localhost:8000
+export OANDA_TOKEN=...           # docs/OANDA.md — free practice account
+python3 -m src.wsgi              # http://localhost:8000
 ```
 
 Endpoints: `/api/catalogue`, `/api/analyze?symbol=&tf=`, `/api/health`.
 Add `?synthetic=1` to see it work with no keys at all.
 
-The server binds to localhost and holds your API keys in memory. It is a local
-tool. Putting it on a host needs auth, HTTPS and rate limiting first, none of
-which are here.
+One WSGI app, so the same code runs locally, on Vercel and on Render —
+see `docs/DEPLOY.md`.
+
+**Deploying needs `MPF_TOKEN` set.** Without it MPF answers only on localhost,
+on purpose: a public instance with no key lets anyone call OANDA with your
+token. `docs/DEPLOY.md` explains why that, and not rate limiting, is the
+protection that matters.
 
 **CLI (one-off, writes a static JSON).**
 

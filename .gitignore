@@ -5,3 +5,5 @@ data/*.csv
 .DS_Store
 
 web/data.json
+.env
+.vercel/
