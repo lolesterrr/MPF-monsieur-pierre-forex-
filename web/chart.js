@@ -29,6 +29,14 @@ const Chart = (() => {
     };
   }
 
+  // Re-alpha an existing rgba() string.
+  function rgba2(s, a) {
+    const m = /rgba?\(([^)]+)\)/.exec(s);
+    if (!m) return s;
+    const p = m[1].split(",").map(x => x.trim());
+    return `rgba(${p[0]},${p[1]},${p[2]},${a})`;
+  }
+
   function rgba(hex, a) {
     const h = hex.replace("#", "");
     const n = h.length === 3
@@ -97,6 +105,25 @@ const Chart = (() => {
 
             // The focused candle gets a column behind it. Price lines alone
             // meant counting bars by eye to find WHICH candle was meant.
+            // The focused zone drawn bright, over the muted ones.
+            if (state.focus && state.focus.zone) {
+              const z = state.focus.zone;
+              const zy1 = series.priceToCoordinate(z.top);
+              const zy2 = series.priceToCoordinate(z.bottom);
+              let zx = ts.timeToCoordinate(state.focus.ts);
+              if (zy1 != null && zy2 != null) {
+                if (zx == null) zx = 0;
+                const bx = Math.max(0, zx * hx);
+                ctx.fillStyle = rgba2(state.focus.stroke, 0.20);
+                ctx.fillRect(bx, Math.min(zy1, zy2) * vy,
+                             W - bx, Math.abs(zy2 - zy1) * vy);
+                ctx.strokeStyle = state.focus.stroke;
+                ctx.lineWidth = Math.max(2, 2 * hx);
+                ctx.strokeRect(bx, Math.min(zy1, zy2) * vy,
+                               W - bx, Math.abs(zy2 - zy1) * vy);
+              }
+            }
+
             if (state.focus && state.focus.ts) {
               const fx = ts.timeToCoordinate(state.focus.ts);
               if (fx != null) {
@@ -307,7 +334,15 @@ const Chart = (() => {
      Three cues, because one was not enough: a labelled marker on the bar, a
      highlighted column behind it, and the bar's OHLC handed back for the
      readout. A price line alone meant counting bars by eye. */
-  function goTo(tf, ts, price, label) {
+  /* Jump to a confluence and show it in the shape it actually is.
+
+     A zone (order block, FVG, Asian range) is a REGION: two edges and a
+     fill, with the origin candle outlined. An arrow pointing at a region is
+     a category error, which is what this used to do.
+
+     A level (swing, PLP, entry, stop) is a single price: a line plus a
+     marker on the bar where it formed. */
+  function goTo(tf, ts, price, label, zone) {
     if (!state.data) return null;
     if (tf && tf !== state.tf) setTimeframe(tf);
 
@@ -315,7 +350,6 @@ const Chart = (() => {
     const bars = (state.data.candles || {})[state.tf] || [];
     if (!bars.length) return null;
 
-    // Snap to the bar CONTAINING ts, not the next one after it.
     let idx = 0;
     if (ts) {
       idx = bars.findIndex(b => b.t >= ts);
@@ -323,6 +357,8 @@ const Chart = (() => {
       if (idx > 0 && bars[idx].t > ts) idx -= 1;
     }
     const bar = bars[idx];
+    const isZone = !!(zone && zone.top != null && zone.bottom != null
+                      && zone.top !== zone.bottom);
 
     const pad = Math.max(14, Math.round(bars.length * 0.10));
     api.setVisibleLogicalRange({ from: idx - pad, to: idx + pad });
@@ -330,42 +366,62 @@ const Chart = (() => {
     const c = state.colors;
     state.focus = {
       ts: bar.t,
-      fill: rgba(c.crown, 0.13),
+      fill: rgba(c.crown, 0.10),
       stroke: rgba(c.crown, 0.8),
+      zone: isZone ? { top: zone.top, bottom: zone.bottom } : null,
     };
 
-    // Put the marker on the side away from the level, so it never covers
-    // the candle it is pointing at.
-    const above = price != null ? price >= bar.c : true;
-    if (markers) {
-      markers.setMarkers([{
-        time: bar.t,
-        position: above ? "aboveBar" : "belowBar",
-        shape: above ? "arrowDown" : "arrowUp",
-        color: c.crown,
-        text: label || "here",
-      }]);
+    if (state.flash) {
+      state.flash.forEach(f => { try { candles.removePriceLine(f); } catch (_) {} });
+    }
+    state.flash = [];
+
+    if (isZone) {
+      // Both edges, because the edges are what you trade against. The
+      // midpoint is meaningless for a zone and used to be all it showed.
+      state.flash.push(candles.createPriceLine({
+        price: zone.top, color: c.crown, lineWidth: 2,
+        lineStyle: LWC().LineStyle.Solid, axisLabelVisible: true,
+        axisLabelColor: c.crown, axisLabelTextColor: c.panel,
+        title: (label || "zone") + " top",
+      }));
+      state.flash.push(candles.createPriceLine({
+        price: zone.bottom, color: c.crown, lineWidth: 2,
+        lineStyle: LWC().LineStyle.Solid, axisLabelVisible: true,
+        axisLabelColor: c.crown, axisLabelTextColor: c.panel,
+        title: (label || "zone") + " base",
+      }));
+      // No arrow for a region — the box IS the pointer.
+      if (markers) markers.setMarkers([]);
+    } else {
+      if (price != null) {
+        state.flash.push(candles.createPriceLine({
+          price, color: c.wattle, lineWidth: 2,
+          lineStyle: LWC().LineStyle.Solid, axisLabelVisible: true,
+          axisLabelColor: c.wattle, axisLabelTextColor: c.panel,
+          title: label || "here",
+        }));
+      }
+      const above = price != null ? price >= bar.c : true;
+      if (markers) {
+        markers.setMarkers([{
+          time: bar.t,
+          position: above ? "aboveBar" : "belowBar",
+          shape: above ? "arrowDown" : "arrowUp",
+          color: c.crown,
+          text: label || "here",
+        }]);
+      }
     }
 
-    if (state.flash) { try { candles.removePriceLine(state.flash); } catch (_) {} }
-    state.flash = null;
-    if (price != null) {
-      state.flash = candles.createPriceLine({
-        price, color: c.wattle, lineWidth: 2,
-        lineStyle: LWC().LineStyle.Solid,
-        axisLabelVisible: true, axisLabelColor: c.wattle,
-        axisLabelTextColor: c.panel, title: label || "here",
-      });
-    }
-
-    return { bar, index: idx, tf: state.tf };
+    return { bar, index: idx, tf: state.tf, isZone };
   }
 
   function clearFocus() {
     state.focus = null;
     if (markers) markers.setMarkers([]);
     if (state.flash) {
-      try { candles.removePriceLine(state.flash); } catch (_) {}
+      state.flash.forEach(f => { try { candles.removePriceLine(f); } catch (_) {} });
       state.flash = null;
     }
   }

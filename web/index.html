@@ -210,6 +210,7 @@ button.ghost.sm { font-size: 12px; padding: 2px 8px; }
 .focusbar .fv .n { color: var(--ink-soft); }
 .focusbar .fo { font-variant-numeric: tabular-nums; color: var(--ink-soft); }
 .focusbar .fp { font-variant-numeric: tabular-nums; color: var(--wattle); }
+.focusbar .fw { flex-basis: 100%; color: var(--ink-soft); font-size: 13px; }
 .focusbar button { margin-left: auto; }
 .conf button.active { background: rgb(243 179 36 / 0.1); outline: 2px solid var(--crown-deep); outline-offset: -2px; }
 
@@ -460,6 +461,7 @@ const WEIGHTS = { weekly_bias:2, daily_bias:2, h1_profile:1, correct_side_eq:1,
 /* ---------- render ---------- */
 function render(d) {
   window.__data = d;
+  PIPSZ = d.meta && d.meta.pip ? d.meta.pip : 0.0001;
   const when = new Date(d.meta.to * 1000);
   const age = d.meta.age_label || "";
   $("#stamp").innerHTML =
@@ -521,7 +523,10 @@ function render(d) {
   const items = d.confluences || [];
   $("#conf").innerHTML = items.length
     ? items.map(c => `<li class="${c.kind}">
-        <button data-tf="${c.tf}" data-ts="${c.ts}" data-price="${c.price}" data-short="${(c.short || c.label || "").replace(/"/g, "")}">
+        <button data-tf="${c.tf}" data-ts="${c.ts}" data-price="${c.price}" data-short="${(c.short || c.label || "").replace(/"/g, "")}"
+          ${c.top != null ? `data-top="${c.top}" data-bottom="${c.bottom}"` : ""}
+          data-why="${(c.why || "").replace(/"/g, "&quot;")}"
+          data-rule="${(c.rule || "").replace(/"/g, "&quot;")}">
           <span class="tf">${c.tf}</span>
           <span><span class="lbl">${c.label}</span><br>
                 <span class="det">${c.detail}</span></span>
@@ -537,8 +542,12 @@ function render(d) {
     [...$("#conf").querySelectorAll("button")].forEach(
       x => x.classList.toggle("active", x === b));
 
+    const zone = (b.dataset.top && b.dataset.bottom)
+      ? { top: Number(b.dataset.top), bottom: Number(b.dataset.bottom) }
+      : null;
     const hit = Chart.goTo(b.dataset.tf, Number(b.dataset.ts),
-                           Number(b.dataset.price), b.dataset.short || "here");
+                           Number(b.dataset.price), b.dataset.short || "here",
+                           zone);
     syncTabs();
     showFocus(b, hit);
     document.querySelector(".chartwrap").scrollIntoView(
@@ -646,12 +655,41 @@ function buildTabs(d) {
     syncTabs();
   };
 
-  const TYPES = [["fvg", "FVG"], ["order_block", "order blocks"], ["swing", "swings"]];
-  $("#toggles").innerHTML = TYPES.map(([k, lbl]) =>
-    `<label><input type="checkbox" data-type="${k}"
-      ${k === "swing" ? "" : "checked"}> ${lbl}</label>`).join("");
-  $("#toggles").onchange = e => {
-    if (e.target.dataset.type) Chart.toggle(e.target.dataset.type, e.target.checked);
+  // One switch per thing drawn, remembered between sessions. Turning off
+  // what you are not looking at is the fastest way to read a busy chart.
+  const TYPES = [
+    ["fvg", "FVG", true],
+    ["order_block", "order blocks", true],
+    ["swing", "swings", false],
+    ["asia", "asia range", true],
+    ["crt", "CRT exits", true],
+    ["plp", "PLP / entry / stop", true],
+    ["eq", "daily 50%", true],
+  ];
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem("mpf-toggles") || "{}"); } catch (_) {}
+
+  $("#toggles").innerHTML = TYPES.map(([k, lbl, def]) => {
+    const on = k in saved ? saved[k] : def;
+    Chart.toggle(k, on);
+    return `<label><input type="checkbox" data-type="${k}"${on ? " checked" : ""}> ${lbl}</label>`;
+  }).join("") + `<button class="ghost sm" id="allon">all</button>`
+             + `<button class="ghost sm" id="alloff">none</button>`;
+
+  const persist = () => {
+    const s = {};
+    $("#toggles").querySelectorAll("input[data-type]").forEach(i => {
+      s[i.dataset.type] = i.checked;
+      Chart.toggle(i.dataset.type, i.checked);
+    });
+    try { localStorage.setItem("mpf-toggles", JSON.stringify(s)); } catch (_) {}
+  };
+  $("#toggles").onchange = e => { if (e.target.dataset.type) persist(); };
+  $("#allon").onclick = () => {
+    $("#toggles").querySelectorAll("input").forEach(i => i.checked = true); persist();
+  };
+  $("#alloff").onclick = () => {
+    $("#toggles").querySelectorAll("input").forEach(i => i.checked = false); persist();
   };
 }
 
@@ -701,13 +739,27 @@ function showFocus(btn, hit) {
     { weekday: "short", hour: "2-digit", minute: "2-digit" });
   const px = Number(btn.dataset.price);
 
+  const top = Number(btn.dataset.top), bot = Number(btn.dataset.bottom);
+  const isZone = hit.isZone && isFinite(top) && isFinite(bot);
+
   box.hidden = false;
   box.innerHTML =
     `<span class="fk">${btn.dataset.short || "level"}</span>` +
-    `<span class="fv">${hit.tf} candle · ${stamp} <span class="n">(${local} your time)</span></span>` +
+    `<span class="fv">${isZone ? "origin candle" : "candle"} ${hit.tf} · ${stamp}` +
+    ` <span class="n">(${local} your time)</span></span>` +
     `<span class="fo">O ${b.o.toFixed(5)} H ${b.h.toFixed(5)} ` +
-    `L ${b.l.toFixed(5)} C ${b.c.toFixed(5)}</span>` +
-    (isFinite(px) ? `<span class="fp">level at ${px.toFixed(5)}</span>` : "") +
+    `L ${b.l.toFixed(5)} C ${b.c.toFixed(5)} ` +
+    `<span class="n">${b.c < b.o ? "down-close" : "up-close"}</span></span>` +
+    // A zone has edges. Showing its midpoint was meaningless — you trade
+    // the boundaries, not the middle.
+    (isZone
+      ? `<span class="fp">zone ${bot.toFixed(5)} – ${top.toFixed(5)} ` +
+        `<span class="n">(${((top - bot) / PIPSZ).toFixed(1)} pips)</span></span>`
+      : (isFinite(px) ? `<span class="fp">level at ${px.toFixed(5)}</span>` : "")) +
+    (btn.dataset.why
+      ? `<span class="fw">why: ${btn.dataset.why}` +
+        (btn.dataset.rule ? ` <span class="n">· ${btn.dataset.rule}</span>` : "") +
+        `</span>` : "") +
     `<button class="ghost sm" id="unfocus">clear</button>`;
 
   $("#unfocus").onclick = () => {
@@ -872,6 +924,8 @@ function load(params) {
 }
 
 const SERVED = location.protocol.startsWith("http");
+// Pip size for the focus readout. JPY pairs and metals are not 0.0001.
+let PIPSZ = 0.0001;
 
 function boot() {
   if (!SERVED) {

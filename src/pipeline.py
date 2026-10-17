@@ -14,7 +14,8 @@ from .core.bias import daily_bias, h1_profile, premium_discount, weekly_bias
 from .core.market_hours import clean, market_status
 from .core.confluence import LevelPool, build_report, check_smt, mark_plp
 from .core.sessions import build_asian_ranges, classify_break
-from .core.types import Bar, Direction, Level, LevelType, Timeframe
+from .core.types import (Bar, Direction, Level, LevelType,
+                         Timeframe, pip_size)
 from .data.feed import TF_SECONDS, load_csv, resample, synthetic
 from .detectors.crt import find_crts
 from .detectors.levels import (
@@ -77,6 +78,10 @@ def _confluence_list(bias, crt, plp, aligned, target, model1,
             "detail": "sits within 5 pips of the PLP",
             "tf": l.timeframe.value, "price": l.mid, "ts": l.created_ts,
             "kind": "aligned",
+            "shape": l.meta.get("shape", "zone" if l.top != l.bottom else "level"),
+            "top": l.top, "bottom": l.bottom,
+            "why": l.meta.get("why", ""),
+            "rule": l.meta.get("rule", ""),
         })
 
     if target:
@@ -124,14 +129,19 @@ def _level_json(l: Level) -> dict:
         "top": round(l.top, 5), "bottom": round(l.bottom, 5),
         "ts": l.created_ts, "tf": l.timeframe.value,
         "status": l.status.value,
+        # A zone is a region with two edges; a level is a single price. The
+        # chart draws them differently because they ARE different things.
+        "shape": l.meta.get("shape", "zone" if l.top != l.bottom else "level"),
+        "why": l.meta.get("why", ""),
+        "rule": l.meta.get("rule", ""),
         "accepted": l.meta.get("accepted"),
         "meta": {k: v for k, v in l.meta.items() if k != "accepted"},
     }
 
 
 def run(bars_m5: List[Bar], anchor_hour_utc: int = 21,
-        comparison: Optional[dict] = None,
-        symbol: Optional[str] = None) -> dict:
+        symbol: Optional[str] = None,
+        comparison: Optional[dict] = None) -> dict:
     """Full top-down pass. Returns the dashboard payload.
 
     `comparison` carries the SMT reference series (Rulebook §8), shaped
@@ -272,6 +282,7 @@ def run(bars_m5: List[Bar], anchor_hour_utc: int = 21,
             "from": bars_m5[0].ts,
             "to": bars_m5[-1].ts,
             "price": round(price, 5),
+            "pip": pip_size(symbol),
             "age_seconds": age_s,
             "age_label": _age_label(age_s),
             # Only stale if the market is OPEN and the data is behind.

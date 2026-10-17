@@ -145,8 +145,8 @@ def _api(path: str, q: dict) -> Tuple[int, dict]:
             except ProviderError as e:
                 print(f"  SMT reference {ref} unavailable: {e}")
 
-        payload = run(bars, anchor_hour_utc=_anchor_hour_utc(),
-                      comparison=comparison, symbol=symbol)
+        payload = run(bars, anchor_hour_utc=_anchor_hour_utc(), symbol=symbol,
+                      comparison=comparison)
         payload["meta"].update(
             symbol=symbol, tf=tf, synthetic=False, provider=provider or "auto",
             smt_reference=(comparison or {}).get("symbol"),

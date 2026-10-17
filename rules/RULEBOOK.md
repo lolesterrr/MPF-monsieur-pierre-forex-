@@ -77,6 +77,16 @@ Per your call — cast wide, you filter by eye.
 4. **Zone:** full candle range, `high` → `low`.
 5. **Invalidation:** a bar **closes** through the zone (below bottom for bullish,
    above top for bearish).
+5a. **The rule is deliberately loose.** It tests two things only: the candle
+   closed against the following move, and that move was >= 1.5x ATR20. It does
+   **not** check that the displacement broke structure, that the candle sits at
+   a swing, or that anything was left unmitigated. That is why the dashboard
+   prints the matched rule next to every candidate — so a weak one is visible
+   as weak rather than asserted as an "order block".
+
+   If you want it stricter, the single highest-value addition is requiring the
+   displacement to take out a prior swing. Say the word and it becomes a flag.
+
 6. **Sweep without close does NOT invalidate.** Wick-through is expected behaviour.
 7. Each candidate gets a stable `id` so you can accept/reject it and the choice persists.
 

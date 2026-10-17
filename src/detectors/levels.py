@@ -40,7 +40,11 @@ def find_fvgs(bars: List[Bar], tf: Timeframe,
                     type=LevelType.FVG, direction=Direction.BULLISH,
                     top=c.low, bottom=a.high,
                     created_ts=c.ts, created_index=i, timeframe=tf,
-                    meta={"size_pips": round(size, 1)},
+                    meta={"size_pips": round(size, 1), "shape": "zone",
+                          "why": (f"{size:.1f} pip gap: bar 3 low "
+                                  f"({c.low:.5f}) never reached bar 1 high "
+                                  f"({a.high:.5f})"),
+                          "rule": "RULEBOOK 2.1 — three-bar wick gap"},
                 ))
 
         elif c.high < a.low:
@@ -50,7 +54,11 @@ def find_fvgs(bars: List[Bar], tf: Timeframe,
                     type=LevelType.FVG, direction=Direction.BEARISH,
                     top=a.low, bottom=c.high,
                     created_ts=c.ts, created_index=i, timeframe=tf,
-                    meta={"size_pips": round(size, 1)},
+                    meta={"size_pips": round(size, 1), "shape": "zone",
+                          "why": (f"{size:.1f} pip gap: bar 3 high "
+                                  f"({c.high:.5f}) never reached bar 1 low "
+                                  f"({a.low:.5f})"),
+                          "rule": "RULEBOOK 2.1 — three-bar wick gap"},
                 ))
 
     return out
@@ -114,6 +122,16 @@ def find_order_block_candidates(
                         "displacement_index": i,
                         "displacement_ratio": round(disp.range / atr, 2),
                         "bars_back": back,
+                        "shape": "zone",
+                        # Spell out the test that fired. Without this the
+                        # chart just asserts "order block" and you cannot
+                        # tell whether to trust it.
+                        "why": (
+                            f"{'down' if cand.is_down else 'up'}-close candle, "
+                            f"then a {disp.range / atr:.1f}x ATR "
+                            f"{'up' if disp.is_up else 'down'} move "
+                            f"{back} bar{'s' if back > 1 else ''} later"),
+                        "rule": "RULEBOOK 2.2 — displacement >= 1.5x ATR20",
                         # UI sets this; None = you haven't judged it yet
                         "accepted": None,
                     },
