@@ -25,7 +25,9 @@ src/core/             types, bias, sessions, confluence engine
 src/detectors/        swings, levels (FVG + OB), CRT, Model #1
 src/data/feed.py      CSV loader, resampler, synthetic generator
 src/pipeline.py       runs the full pass, writes web/data.json
-web/                  the dashboard
+web/index.html        the dashboard
+web/chart.js          Lightweight Charts wiring + the zone primitive
+web/vendor/           Lightweight Charts v5 (Apache 2.0) + its licence
 assets/               Monsieur Pierre
 tests/                hand-built bars with known answers
 ```
@@ -61,6 +63,28 @@ Reads `web/data.json`. Panels: the bias stack (weekly → daily → 1H, and whet
 they actually agree), the confluence count, a 1H chart with every timeframe's
 levels overlaid, the active CRT, PLP alignment, the Asian range, the Model #1
 trigger, and a queue of order block candidates for you to keep or drop.
+
+### Chart
+
+[Lightweight Charts](https://github.com/tradingview/lightweight-charts) v5,
+Apache 2.0, vendored at `web/vendor/` so there is no build step and no CDN
+dependency. Licence kept beside it; the TradingView attribution mark stays on
+the chart, which is how the licence is satisfied.
+
+v5 notes, since most tutorials online are still v4:
+
+- Series are created with `chart.addSeries(CandlestickSeries, opts)`, not the
+  v4 `chart.addCandlestickSeries(opts)`.
+- The standalone build exposes everything on `window.LightweightCharts`.
+- The library has no box/rectangle, so FVG and order block zones are drawn by a
+  **series primitive** (`web/chart.js`) that gets the chart's own coordinate
+  converters — zones stay pinned to price and time through zoom and pan.
+- `localization.locale` is pinned to `en-US`. The library formats axis labels
+  through `Intl`, and an unusual system locale throws mid-render and silently
+  blanks the chart.
+
+Horizontal markers (daily 50%, CRT exits, PLP, entry, stop, Asian range edges)
+are real price lines, so the library places and de-collides their axis labels.
 
 Order block verdicts save to `localStorage` on your machine. They are per-browser
 and are not read back by the pipeline yet — the plan is to use them to measure how

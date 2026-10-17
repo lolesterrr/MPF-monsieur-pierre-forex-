@@ -127,7 +127,7 @@ button.ghost:hover { background: var(--ink); color: var(--panel); }
 
 /* ---------- chart ---------- */
 .chartwrap { position: relative; }
-canvas { display: block; width: 100%; height: 420px; }
+#chart { width: 100%; height: 460px; }
 .legend {
   display: flex; flex-wrap: wrap; gap: 12px; padding: 9px 12px;
   border-top: 2px solid var(--tone); font-family: var(--f-pixel); font-size: 12.5px;
@@ -187,7 +187,7 @@ footer {
 
 @media (max-width: 900px) {
   .panel, .panel[style] { grid-column: 1 / -1 !important; }
-  canvas { height: 300px; }
+  #chart { height: 320px; }
 }
 </style>
 </head>
@@ -230,16 +230,17 @@ footer {
       <span class="chips"><span class="chip" id="pricechip">—</span></span>
     </div>
     <div class="chartwrap">
-      <canvas id="chart"></canvas>
+      <div id="chart"></div>
       <div class="readout" id="readout"></div>
     </div>
     <div class="legend">
-      <span><i style="background:var(--crown)"></i>FVG</span>
-      <span><i style="background:var(--cool)"></i>order block</span>
-      <span><i style="background:var(--ink-soft);height:3px"></i>swing</span>
-      <span><i style="background:var(--wattle);height:3px"></i>PLP</span>
+      <span><i style="background:var(--crown);opacity:.5"></i>FVG (4H / D1)</span>
+      <span><i style="background:var(--cool);opacity:.5"></i>order block (4H / D1)</span>
       <span><i style="background:var(--crown-deep);height:3px"></i>daily 50%</span>
-      <span>asia range = hatched</span>
+      <span><i style="background:var(--crown);height:3px"></i>CRT exits</span>
+      <span><i style="background:var(--wattle);height:3px"></i>PLP / stop</span>
+      <span><i style="border-top:2px dashed var(--ink-soft);height:0"></i>asia range</span>
+      <span class="n">scroll to zoom · drag to pan</span>
     </div>
   </section>
 
@@ -288,6 +289,8 @@ footer {
 <div id="pierre" hidden></div>
 <div class="speech" id="speech"></div>
 
+<script src="vendor/lightweight-charts.standalone.production.js"></script>
+<script src="chart.js"></script>
 <script>
 const $ = s => document.querySelector(s);
 const fmt = n => n == null ? "—" : Number(n).toFixed(5);
@@ -298,7 +301,7 @@ const arrow = d => d === "bullish" ? "▲" : d === "bearish" ? "▼" : "·";
 $("#theme").onclick = () => {
   const cur = document.documentElement.getAttribute("data-theme");
   document.documentElement.setAttribute("data-theme", cur === "light" ? "dark" : "light");
-  if (window.__data) draw(window.__data);
+  Chart.theme();
 };
 
 const LABELS = {
@@ -438,147 +441,25 @@ function render(d) {
     try { localStorage.setItem("ob-verdicts", JSON.stringify(s)); } catch (_) {}
   };
 
-  draw(d);
+  Chart.render(d);
 }
 
 function kv(pairs) {
   return pairs.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
 }
 
-/* ---------- chart ---------- */
-function draw(d) {
-  const cv = $("#chart"), ctx = cv.getContext("2d");
-  const dpr = window.devicePixelRatio || 1;
-  const W = cv.clientWidth, H = cv.clientHeight;
-  cv.width = W * dpr; cv.height = H * dpr;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, W, H);
-
-  const css = getComputedStyle(document.documentElement);
-  const C = n => css.getPropertyValue(n).trim();
-  const ink = C("--ink"), soft = C("--ink-soft"), crown = C("--crown"),
-        cool = C("--cool"), wattle = C("--wattle"), deep = C("--crown-deep");
-
-  const c = d.candles; if (!c.length) return;
-  const PAD = { l: 8, r: 64, t: 14, b: 20 };
-  const plotW = W - PAD.l - PAD.r, plotH = H - PAD.t - PAD.b;
-
-  let lo = Math.min(...c.map(b => b.l)), hi = Math.max(...c.map(b => b.h));
-  // Include the levels that matter so they are not drawn off-screen.
-  const extra = [];
-  if (d.plp) extra.push(d.plp.price);
-  if (d.zone) extra.push(d.zone.eq);
-  if (d.asia) extra.push(d.asia.high, d.asia.low);
-  extra.filter(v => v > lo * 0.97 && v < hi * 1.03).forEach(v => {
-    lo = Math.min(lo, v); hi = Math.max(hi, v);
-  });
-  const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
-
-  const X = i => PAD.l + (i + 0.5) * (plotW / c.length);
-  const Y = p => PAD.t + plotH * (1 - (p - lo) / (hi - lo));
-  const bw = Math.max(1.5, (plotW / c.length) * 0.62);
-
-  const t0 = c[0].t, t1 = c[c.length - 1].t;
-  const tx = t => PAD.l + plotW * Math.min(1, Math.max(0, (t - t0) / (t1 - t0)));
-
-  /* zones behind candles.
-     Every timeframe's levels in one pile is unreadable — 300+ bands wash the
-     chart out. Only HTF zones draw, and only the handful nearest price. */
-  const px = d.meta.price;
-  const zones = d.levels
-    .filter(l => l.type !== "swing" && l.top > lo && l.bottom < hi
-                 && (l.tf === "4h" || l.tf === "1d")
-                 // A zone taller than a quarter of the view isn't a level,
-                 // it's a backdrop. Skip it rather than flood the chart.
-                 && (l.top - l.bottom) < (hi - lo) * 0.25)
-    .sort((a, b) => Math.abs((a.top + a.bottom) / 2 - px)
-                  - Math.abs((b.top + b.bottom) / 2 - px))
-    .slice(0, 14);
-  zones.forEach(l => {
-    const y1 = Y(l.top), y2 = Y(l.bottom), x0 = tx(l.ts);
-    ctx.fillStyle = l.type === "fvg" ? crown : cool;
-    ctx.globalAlpha = 0.17;
-    ctx.fillRect(x0, y1, W - PAD.r - x0, Math.max(1.5, y2 - y1));
-    ctx.globalAlpha = 0.5;
-    ctx.strokeStyle = l.type === "fvg" ? crown : cool; ctx.lineWidth = 1;
-    ctx.strokeRect(x0, y1, W - PAD.r - x0, Math.max(1.5, y2 - y1));
-    ctx.globalAlpha = 1;
-  });
-
-  /* asia range — hatched */
-  if (d.asia && d.asia.high < hi && d.asia.low > lo) {
-    const y1 = Y(d.asia.high), y2 = Y(d.asia.low);
-    ctx.save();
-    ctx.beginPath(); ctx.rect(PAD.l, y1, plotW, y2 - y1); ctx.clip();
-    ctx.strokeStyle = soft; ctx.globalAlpha = 0.3; ctx.lineWidth = 1;
-    for (let x = PAD.l - plotH; x < W; x += 9) {
-      ctx.beginPath(); ctx.moveTo(x, y2); ctx.lineTo(x + (y2 - y1), y1); ctx.stroke();
-    }
-    ctx.restore();
-    ctx.strokeStyle = soft; ctx.globalAlpha = 0.65; ctx.lineWidth = 1.5;
-    ctx.strokeRect(PAD.l, y1, plotW, y2 - y1); ctx.globalAlpha = 1;
-  }
-
-  /* candles */
-  c.forEach((b, i) => {
-    const x = X(i), up = b.c >= b.o;
-    ctx.strokeStyle = ink; ctx.globalAlpha = up ? 0.85 : 1; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(x, Y(b.h)); ctx.lineTo(x, Y(b.l)); ctx.stroke();
-    const yO = Y(b.o), yC = Y(b.c);
-    ctx.fillStyle = up ? C("--panel") : ink;
-    ctx.fillRect(x - bw / 2, Math.min(yO, yC), bw, Math.max(1.2, Math.abs(yC - yO)));
-    ctx.strokeRect(x - bw / 2, Math.min(yO, yC), bw, Math.max(1.2, Math.abs(yC - yO)));
-    ctx.globalAlpha = 1;
-  });
-
-  /* horizontal markers. Labels are nudged apart so two lines a pip apart
-     don't print on top of each other. */
-  const taken = [];
-  const hline = (p, color, label, dash) => {
-    if (p < lo || p > hi) return;
-    const y = Y(p);
-    ctx.save(); ctx.setLineDash(dash || []); ctx.strokeStyle = color; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(PAD.l, y); ctx.lineTo(W - PAD.r, y); ctx.stroke();
-    ctx.restore();
-
-    let ly = y;
-    while (taken.some(t => Math.abs(t - ly) < 12)) ly += 12;
-    taken.push(ly);
-    if (Math.abs(ly - y) > 2) {            // leader line back to the real level
-      ctx.save(); ctx.strokeStyle = color; ctx.globalAlpha = 0.5; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(W - PAD.r, y); ctx.lineTo(W - PAD.r + 4, ly); ctx.stroke();
-      ctx.restore();
-    }
-    ctx.fillStyle = color; ctx.font = '12px "DotGothic16", monospace';
-    ctx.textBaseline = "middle"; ctx.fillText(label, W - PAD.r + 6, ly);
-  };
-
-  if (d.zone) hline(d.zone.eq, deep, "eq 50%", [6, 4]);
-  if (d.plp) hline(d.plp.price, wattle, "PLP", [2, 3]);
-  if (d.crt) { hline(d.crt.eq, crown, "crt 50%", [6, 4]); hline(d.crt.opposing, crown, "crt t2", [1, 4]); }
-  if (d.model1) { hline(d.model1.entry, ink, "entry"); hline(d.model1.stop, wattle, "stop", [3, 3]); }
-
-  /* swings as ticks */
-  ctx.strokeStyle = soft; ctx.globalAlpha = 0.5; ctx.lineWidth = 2;
-  d.levels.filter(l => l.type === "swing" && l.top < hi && l.top > lo)
-    .slice(-60).forEach(l => {
-      const x = tx(l.ts), y = Y(l.top);
-      ctx.beginPath(); ctx.moveTo(x - 4, y); ctx.lineTo(x + 4, y); ctx.stroke();
-    });
-  ctx.globalAlpha = 1;
-
-  /* hover readout */
+/* ---------- chart (Lightweight Charts) ---------- */
+function wireCrosshair(d) {
   const ro = $("#readout");
-  cv.onmousemove = e => {
-    const rect = cv.getBoundingClientRect();
-    const i = Math.round(((e.clientX - rect.left - PAD.l) / (plotW / c.length)) - 0.5);
-    if (i < 0 || i >= c.length) { ro.classList.remove("on"); return; }
-    const b = c[i];
+  const byTime = new Map(d.candles.map(b => [b.t, b]));
+  Chart.subscribeCrosshair(p => {
+    const b = p.time ? byTime.get(p.time) : null;
+    if (!b) { ro.classList.remove("on"); return; }
     ro.classList.add("on");
-    ro.textContent = `${new Date(b.t * 1000).toISOString().slice(5, 16).replace("T", " ")}  `
-      + `O ${b.o.toFixed(5)}  H ${b.h.toFixed(5)}  L ${b.l.toFixed(5)}  C ${b.c.toFixed(5)}`;
-  };
-  cv.onmouseleave = () => ro.classList.remove("on");
+    ro.textContent =
+      new Date(b.t * 1000).toISOString().slice(5, 16).replace("T", " ")
+      + `  O ${b.o.toFixed(5)}  H ${b.h.toFixed(5)}  L ${b.l.toFixed(5)}  C ${b.c.toFixed(5)}`;
+  });
 }
 
 /* ---------- Monsieur Pierre ---------- */
@@ -636,16 +517,22 @@ function draw(d) {
 })();
 
 /* ---------- boot ---------- */
-fetch("data.json")
-  .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
-  .then(render)
-  .catch(err => {
-    $("#strip").hidden = false;
-    $("#stripmsg").textContent =
-      "No data.json. Run:  python3 -m src.pipeline --synthetic --out web/data.json  (" + err.message + ")";
-  });
+function fail(msg) {
+  $("#strip").hidden = false;
+  $("#stripmsg").textContent = msg;
+}
 
-addEventListener("resize", () => { if (window.__data) draw(window.__data); });
+try { Chart.mount($("#chart")); }
+catch (e) { fail("Chart library didn't load — check vendor/ and reload. (" + e.message + ")"); }
+
+fetch("data.json")
+  .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+  .then(d => { render(d); wireCrosshair(d); })
+  .catch(err => fail(
+    "No data.json. Run:  python3 -m src.pipeline --synthetic --bars 12000 --out web/data.json"
+    + "  (" + err.message + ")"));
+
+/* autoSize handles resize — the chart owns its own layout now. */
 </script>
 </body>
 </html>
