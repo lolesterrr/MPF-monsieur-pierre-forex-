@@ -38,16 +38,43 @@ Serverless, no idle spin-down, and a push deploys. The free Hobby tier is
 1. Push the repo to GitHub.
 2. **vercel.com → Add New → Project →** import the repo.
 3. Framework preset: **Other**. No build command.
-4. **Environment Variables**, before the first deploy:
+4. **Environment Variables**, before the first deploy. This is where API keys
+   go — never in the code, never in the repo:
 
-   | Name | Value |
-   |---|---|
-   | `OANDA_TOKEN` | your practice token |
-   | `OANDA_ENV` | `practice` |
-   | `MPF_TOKEN` | the key you generated |
-   | `TWELVEDATA_KEY` | optional |
+   | Name | Value | Needed |
+   |---|---|---|
+   | `MPF_TOKEN` | the key you generated above | **yes** |
+   | `TWELVEDATA_KEY` | your Twelve Data key | for live data |
+   | `OANDA_TOKEN` | practice token, if your country is accepted | optional |
+   | `OANDA_ENV` | `practice` | with OANDA |
+   | `ALPHAVANTAGE_KEY` | fallback source | optional |
+
+   Set the scope to **Production, Preview and Development** so previews work too.
 
 5. Deploy.
+
+### Adding or changing a key later
+
+Vercel does not pick up a changed environment variable until the next deploy.
+Set it, then **Deployments → ⋯ → Redeploy**, or:
+
+```bash
+npx vercel env add TWELVEDATA_KEY production
+npx vercel --prod
+```
+
+### Then check it
+
+```bash
+python3 -m src.checkdeploy https://your-app.vercel.app --key YOUR_MPF_TOKEN
+```
+
+This verifies the three things that are easy to get silently wrong: that the API
+rejects unauthenticated requests, that your keys actually loaded into the host's
+environment, and that a real analysis comes back with fresh data.
+
+If it reports `API answered WITHOUT a key`, stop and fix that before leaving the
+instance up.
 
 `vercel.json` and `.python-version` are already in the repo. Vercel finds `app`
 in `app.py` by itself.
@@ -103,6 +130,23 @@ unauthorised requests are rejected before any provider is called, and there is
 nothing left to rate limit. That is why MPF has a token and no rate limiter.
 
 ---
+
+## Why the key isn't "in the app"
+
+A reasonable instinct is to put the API key in the web app so it travels with
+the code. Don't — and this is the one place it genuinely matters.
+
+Anything the browser can read, a visitor can read. A key in the HTML, in a JS
+file, or in a `fetch()` call is visible in the network tab within seconds. That
+is true no matter how it is obfuscated, because the browser has to send it in
+clear to call the API.
+
+Environment variables on the host *are* the integration. The key lives in the
+server process, the server calls Twelve Data, and only candles come back to the
+browser. The key never leaves the host.
+
+That is the entire reason MPF has a backend rather than calling the data vendor
+straight from JavaScript.
 
 ## Keys: where they go and where they never go
 
