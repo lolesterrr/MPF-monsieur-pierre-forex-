@@ -3,7 +3,8 @@
   "functions": {
     "api/index.py": {
       "includeFiles": "{src/**,web/**,assets/**}",
-      "excludeFiles": "{tests/**,docs/**,**/__pycache__/**,web/data.json}"
+      "excludeFiles": "{tests/**,docs/**,**/__pycache__/**,web/data.json}",
+      "maxDuration": 60
     }
   },
   "rewrites": [

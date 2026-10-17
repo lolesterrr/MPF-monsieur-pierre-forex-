@@ -317,9 +317,31 @@ footer {
   .btcell .v { font-size: 18px; }
 }
 
-/* Pierre is a desktop flourish. On a touch screen there is no cursor for him
-   to follow, and his speech bubble lands on top of the panels. */
+/* Pierre used to be hidden on touch screens, back when his whole job was
+   chasing a cursor that does not exist there. His job now is walking to the
+   candle you selected and sleeping when the data is stale — neither needs a
+   cursor, and both matter MORE on a phone, where there is less screen to
+   orient yourself in. So he stays.
+
+   What genuinely did not fit was the bubble: 190px of text pinned next to a
+   32px cat lands on top of the panels on a narrow screen. On mobile it goes
+   to the bottom of the screen as a strip instead. */
 @media (hover: none), (max-width: 620px) {
+  .speech {
+    left: 8px !important; right: 8px !important;
+    top: auto !important; bottom: 8px !important;
+    max-width: none; text-align: center;
+    box-shadow: 0 2px 0 var(--ink);
+  }
+}
+
+/* Fine coarse-pointer tuning: he is a 32px sprite on a dense screen, so give
+   him a touch more size rather than letting him become a speck. */
+@media (hover: none) {
+  #pierre { transform: scale(1.25); transform-origin: bottom center; }
+}
+
+@media print {
   #pierre, .speech { display: none !important; }
 }
 </style>

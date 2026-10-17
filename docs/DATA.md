@@ -131,3 +131,46 @@ country check, and more history than any free broker feed would give you.
 
 Verify the decode once, pull 30 days, and run the backtest. That was always the
 real blocker, and it was never actually OANDA.
+
+---
+
+## Why the backtest has still never run on real data
+
+Status as of 2026-10-18. The replay engine is fine — 40,000 synthetic bars
+produce 113 trades across a clean train/test split in under a second, and the
+out-of-sample number comes back at −0.035R on a random walk, which is correct
+and means it is not flattering anything. **Every remaining problem is data
+acquisition, not analysis.** Two of them:
+
+**1. `/api/backtest` picks the deepest pager, which is Dukascopy, which is
+far too slow for a serverless request.** `get_history` chooses by
+`max_per_request`, and Dukascopy advertises 100,000 against Twelve Data's
+5,000 — so it always wins. But Dukascopy issues one HTTP request *per hour of
+history*: six pages of 5m bars is roughly 8,000 requests. No function timeout
+makes that work. `maxDuration` is now 60s, which is enough for Twelve Data and
+nowhere near enough for this.
+
+**2. Twelve Data cannot page at all.** `TwelveData.supports_paging` is False,
+so it is never eligible as a pager. With Dukascopy removed it would fall
+through to a single `get_bars` call: 5,000 bars, about 17 days of 5m, which
+yields a handful of trades and an honest "too few trades" verdict.
+
+So the endpoint either times out or returns too little. Neither failure is
+visible until you deploy and tap the button.
+
+The fix is to teach Twelve Data to page — its `time_series` endpoint takes
+`end_date`, so the cursor `get_history` already passes can drive it — and to
+prefer a provider that can answer inside the request budget rather than the
+one with the biggest advertised page. Dukascopy stays the right answer for
+deep history pulled **offline** to a CSV, which is the other way to do this:
+
+```bash
+python3 -m src.data.dukascopy --verify EURUSD     # eyeball the decode first
+# then pull locally, write a CSV, and feed it in:
+python3 -m src.pipeline --csv eurusd_5m.csv --out web/data.json
+```
+
+Note for anyone running this inside a sandboxed agent environment:
+`datafeed.dukascopy.com` and `api.twelvedata.com` are usually not on the
+egress allowlist, so neither can be reached from there. That is a property of
+the sandbox, not of the providers.
