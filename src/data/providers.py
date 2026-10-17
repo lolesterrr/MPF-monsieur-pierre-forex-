@@ -274,10 +274,119 @@ class Yahoo(Provider):
         return self._sane(bars, symbol)[-count:]
 
 
+# --------------------------------------------------------------- Alpha Vantage
+
+class AlphaVantage(Provider):
+    """Forex intraday. Free key, signup open worldwide — it is a data vendor,
+    not a broker, so there is no per-country licensing.
+
+        ALPHAVANTAGE_KEY=...        (alphavantage.co/support/#api-key)
+
+    The free allowance is small (documented as 25 requests/day at the time of
+    writing — check the current figure). Fine as a fallback, not as a primary.
+    No metals on the free tier.
+    """
+    name = "alphavantage"
+    symbols = {
+        "EURUSD": ("EUR", "USD"), "GBPUSD": ("GBP", "USD"),
+        "USDJPY": ("USD", "JPY"), "AUDUSD": ("AUD", "USD"),
+        "USDCAD": ("USD", "CAD"), "USDCHF": ("USD", "CHF"),
+        "NZDUSD": ("NZD", "USD"), "EURGBP": ("EUR", "GBP"),
+        "EURJPY": ("EUR", "JPY"), "GBPJPY": ("GBP", "JPY"),
+    }
+    granularity = {"1m": "1min", "5m": "5min", "15m": "15min",
+                   "30m": "30min", "1h": "60min"}
+
+    def fetch(self, symbol: str, tf: str, count: int = 5000,
+              before_ts: Optional[int] = None) -> List[Bar]:
+        key = self._env("ALPHAVANTAGE_KEY",
+                        "Free key at alphavantage.co/support/#api-key")
+        frm, to = self.symbols[symbol]
+        q = urllib.parse.urlencode({
+            "function": "FX_INTRADAY", "from_symbol": frm, "to_symbol": to,
+            "interval": self.granularity[tf], "outputsize": "full",
+            "apikey": key,
+        })
+        data = self._get_json(f"https://www.alphavantage.co/query?{q}")
+
+        # Alpha Vantage returns 200 with an explanatory body when throttled.
+        for bad in ("Note", "Information", "Error Message"):
+            if bad in data:
+                raise ProviderError(f"alphavantage: {data[bad]}")
+
+        series = next((v for k, v in data.items() if "Time Series" in k), None)
+        if not series:
+            raise ProviderError(f"alphavantage: unexpected response for {symbol}")
+
+        bars = []
+        for stamp, v in series.items():
+            dt = datetime.fromisoformat(stamp)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            bars.append(Bar(
+                ts=int(dt.timestamp()),
+                open=float(v["1. open"]), high=float(v["2. high"]),
+                low=float(v["3. low"]), close=float(v["4. close"]),
+            ))
+        return self._sane(bars, symbol)[-count:]
+
+
+# --------------------------------------------------------------- Dukascopy
+
+class Dukascopy(Provider):
+    """Public historical datafeed. **No account, no key, no country check.**
+
+    This is the answer when a broker refuses to open an account in your
+    country: Dukascopy's historical files are a static server, so geography
+    never enters into it. It also has by far the deepest free history, which
+    is what the backtest needs.
+
+    Slow — one request per hour of history — so it is ordered last for live
+    dashboard use but is the right choice for `get_history`.
+
+    Verify the decode once before trusting it:
+        python3 -m src.data.dukascopy --verify EURUSD
+    """
+    name = "dukascopy"
+    supports_paging = True
+    max_per_request = 100000
+
+    def __init__(self):
+        from .dukascopy import SYMBOLS, TF_SECONDS
+        self.symbols = {k: k for k in SYMBOLS}
+        self.granularity = {k: k for k in TF_SECONDS}
+
+    def fetch(self, symbol: str, tf: str, count: int = 5000,
+              before_ts: Optional[int] = None) -> List[Bar]:
+        from datetime import datetime as _dt
+        from .dukascopy import DukascopyError, TF_SECONDS
+        from .dukascopy import fetch as duka_fetch
+
+        # Work backwards from count: how many days of history is that?
+        secs = TF_SECONDS[tf]
+        days = max(2, int((count * secs) / 86400 * 1.6) + 1)   # weekends cost ~30%
+        days = min(days, 120)                                   # keep it sane
+
+        end = (_dt.fromtimestamp(before_ts, tz=timezone.utc)
+               if before_ts else None)
+        try:
+            return duka_fetch(symbol, tf, days=days, end=end, quiet=True)[-count:]
+        except DukascopyError as e:
+            raise ProviderError(f"dukascopy: {e}") from e
+
+
 # --------------------------------------------------------------- registry
 
 #: Order matters — first provider that supports the symbol and has its key wins.
-PROVIDERS: List[Provider] = [Oanda(), TwelveData(), Yahoo()]
+#:
+#: OANDA first where it works, but it is a BROKER and refuses accounts in many
+#: countries (Uganda among them). Everything after it is a data vendor or a
+#: public file server, none of which care where you live. Dukascopy is last
+#: for live use because it is slow, but it needs no account at all and has the
+#: deepest history — see docs/DATA.md.
+PROVIDERS: List[Provider] = [
+    Oanda(), TwelveData(), AlphaVantage(), Yahoo(), Dukascopy(),
+]
 
 BY_NAME = {p.name: p for p in PROVIDERS}
 
@@ -309,7 +418,9 @@ def get_history(symbol: str, tf: str = "5m", pages: int = 6,
     symbol = symbol.upper()
     chain = [BY_NAME[provider]] if provider else \
         [p for p in PROVIDERS if p.supports(symbol, tf)]
-    pager = next((p for p in chain if p.supports_paging), None)
+    # Prefer the deepest pager for history, not just the first one.
+    pagers = [p for p in chain if p.supports_paging]
+    pager = max(pagers, key=lambda p: p.max_per_request) if pagers else None
 
     if pager is None:
         # No pager available — one page is all there is.

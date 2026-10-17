@@ -5,23 +5,31 @@ In priority order — the first one unblocks everything else.
 
 ---
 
-## 1. OANDA token · REQUIRED · ~10 min · free
+## 1. Real data · REQUIRED · ~2 min · free · **no account needed**
 
 Without it MPF can only show synthetic data, which is a random walk and means
 nothing.
 
-Full walkthrough: **`docs/OANDA.md`**. Short version:
-
-1. oanda.com → register → choose **Practice**, not Live
-2. Sign in → **My Account → Manage API Access** → Generate
-3. `export OANDA_TOKEN=...`
-
-No card, no deposit. Practice accounts get the same market data as live ones.
+**OANDA is geo-blocked in Uganda** — it is a broker, and brokers need a licence
+per country. Use Dukascopy instead: a public file server, no signup, no key, no
+country check, and deeper history than OANDA would have given you.
 
 ```bash
-cp .env.example .env     # fill it in
+python3 -m src.data.dukascopy --verify EURUSD     # confirm the decode
+python3 -m src.wsgi
+```
+
+Verify first. It is an undocumented binary endpoint, so MPF parses it two ways
+and keeps whichever produces sane prices — `--verify` shows you real quotes so
+you can confirm with your own eyes.
+
+Full comparison of every option: **`docs/DATA.md`**.
+
+Optional keyed sources (both open worldwide, both free tiers) go in `.env`:
+
+```bash
+cp .env.example .env     # TWELVEDATA_KEY, ALPHAVANTAGE_KEY — optional
 export $(grep -v '^#' .env | xargs)
-python3 -m src.wsgi      # http://localhost:8000
 ```
 
 ---
@@ -96,15 +104,16 @@ backtest's per-condition breakdown is how you'd replace them with measured ones.
 
 ## What you do NOT need
 
-- **A broker account with money.** MPF places no orders.
+- **A broker account.** Dukascopy's feed needs no signup at all, and MPF
+  places no orders regardless.
 - **A paid data feed**, unless you want real CME futures (NQ/ES), which start
-  around $199/mo. Forex and gold are free via OANDA.
+  around $199/mo. Forex and gold are free.
 - **A domain.** Vercel gives you a URL.
 - **A database.** Everything is files and environment variables.
 
 ---
 
-## Once the token is in
+## Once data is flowing
 
 ```bash
 python3 -m src.wsgi                  # dashboard

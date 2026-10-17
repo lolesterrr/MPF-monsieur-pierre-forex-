@@ -87,9 +87,13 @@ account is a real feed with no catch, and that is the recommended path.
 **Web (the normal way).** Instrument and timeframe pickers, live fetch:
 
 ```bash
-export OANDA_TOKEN=...           # docs/OANDA.md — free practice account
-python3 -m src.wsgi              # http://localhost:8000
+python3 -m src.data.dukascopy --verify EURUSD   # no account needed
+python3 -m src.wsgi                             # http://localhost:8000
 ```
+
+Five data providers behind one interface. **Dukascopy needs no account, no key
+and no country check** — which matters, because OANDA is a broker and brokers
+geo-block signups. See `docs/DATA.md`.
 
 Endpoints: `/api/catalogue`, `/api/analyze?symbol=&tf=`, `/api/health`.
 Add `?synthetic=1` to see it work with no keys at all.
