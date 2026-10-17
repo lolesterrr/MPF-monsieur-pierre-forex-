@@ -57,6 +57,7 @@ button.ghost:hover { background: var(--ink); color: var(--panel); }
 button.ghost[disabled] { opacity: .5; cursor: progress; }
 button.ghost.sm { font-size: 12px; padding: 2px 8px; }
 
+#conf { max-height: 470px; overflow-y: auto; }
 .btgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 1px; background: var(--tone); border: 2px solid var(--ink); margin-bottom: 12px; }
 .btcell { background: var(--panel); padding: 9px 11px; }
 .btcell .k { font-family: var(--f-pixel); font-size: 11.5px; color: var(--ink-soft); display: block; }
@@ -73,6 +74,8 @@ button.ghost.sm { font-size: 12px; padding: 2px 8px; }
   background: var(--panel); color: var(--ink);
   border: 2px solid var(--ink); cursor: pointer;
 }
+.picker select option:disabled { color: var(--ink-soft); opacity: .55; }
+.picker select optgroup { font-family: var(--f-pixel); font-style: normal; }
 .picker select:focus-visible, button.ghost:focus-visible {
   outline: 3px solid var(--crown-deep); outline-offset: 2px;
 }
@@ -81,9 +84,12 @@ button.ghost.sm { font-size: 12px; padding: 2px 8px; }
 .strip {
   border: var(--line) solid var(--wattle); color: var(--wattle);
   font-family: var(--f-pixel); font-size: 13.5px; padding: 8px 12px;
-  margin-bottom: var(--gap); display: flex; gap: 10px; align-items: center;
+  margin-bottom: var(--gap); display: flex; gap: 10px; align-items: flex-start;
 }
-.strip b { font-family: var(--f-pixel); }
+.strip b { font-family: var(--f-pixel); flex: none; }
+/* A shut market is not an error. Only real failures get the red. */
+.strip.info { border-color: var(--ink-soft); color: var(--ink-soft); }
+.strip.warn { border-color: var(--crown-deep); color: var(--crown-deep); }
 
 /* ---------- grid + panels ---------- */
 .grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--gap); }
@@ -132,11 +138,33 @@ button.ghost.sm { font-size: 12px; padding: 2px 8px; }
 }
 
 /* ---------- score ---------- */
-.scorewrap { display: flex; align-items: baseline; gap: 12px; padding: 14px 12px 6px; }
-.score { font-family: var(--f-display); font-size: 58px; line-height: 0.85; }
-.scoreof { font-family: var(--f-pixel); font-size: 17px; color: var(--ink-soft); }
-.meter { height: 14px; border: 2px solid var(--ink); margin: 6px 12px 12px; position: relative; }
-.meter > i { display: block; height: 100%; background: var(--crown); }
+/* The score used to be a 58px headline. It is a count of conditions with
+   untested weights, so it lives in a chip now and the things you can actually
+   verify get the space. */
+.conf { list-style: none; margin: 0; padding: 0; }
+.conf li { border-bottom: 2px solid var(--tone); }
+.conf li:last-child { border-bottom: 0; }
+.conf button {
+  width: 100%; text-align: left; background: none; border: 0; cursor: pointer;
+  display: grid; grid-template-columns: 44px 1fr auto; gap: 10px;
+  align-items: baseline; padding: 10px 12px; color: var(--ink); font: inherit;
+}
+.conf button:hover, .conf button:focus-visible { background: var(--tone); outline: 0; }
+.conf .tf {
+  font-family: var(--f-pixel); font-size: 11.5px; text-align: center;
+  border: 2px solid currentColor; padding: 1px 0; color: var(--ink-soft);
+}
+.conf .lbl { font-size: 14px; }
+.conf .det { font-size: 12.5px; color: var(--ink-soft); }
+.conf .go { font-family: var(--f-pixel); font-size: 12px; color: var(--ink-soft); }
+.conf li.crt .tf, .conf li.model1 .tf { color: var(--crown-deep); }
+.conf li.plp .tf { color: var(--wattle); }
+
+.checkdrop { border-top: var(--line) solid var(--ink); margin-top: auto; }
+.checkdrop summary {
+  font-family: var(--f-pixel); font-size: 12.5px; padding: 9px 12px;
+  cursor: pointer; color: var(--ink-soft);
+}
 .checks { list-style: none; margin: 0; padding: 0 12px 12px; display: grid; gap: 3px; }
 .checks li {
   display: grid; grid-template-columns: 18px 1fr auto; gap: 8px;
@@ -150,6 +178,25 @@ button.ghost.sm { font-size: 12px; padding: 2px 8px; }
 .checks li .w { font-family: var(--f-pixel); font-size: 12px; color: var(--ink-soft); }
 
 /* ---------- chart ---------- */
+.tfbar {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  padding: 7px 10px; border-bottom: 2px solid var(--tone);
+}
+.tfs { display: flex; gap: 0; border: 2px solid var(--ink); }
+.tfs button {
+  font-family: var(--f-pixel); font-size: 13px; padding: 4px 12px;
+  background: var(--panel); color: var(--ink); border: 0;
+  border-right: 2px solid var(--ink); cursor: pointer;
+}
+.tfs button:last-child { border-right: 0; }
+.tfs button[aria-pressed="true"] { background: var(--ink); color: var(--panel); }
+.toggles { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.toggles label {
+  font-family: var(--f-pixel); font-size: 12px; display: inline-flex;
+  align-items: center; gap: 5px; cursor: pointer; color: var(--ink-soft);
+}
+.toggles input { accent-color: var(--crown-deep); }
+
 .chartwrap { position: relative; }
 #chart { width: 100%; height: 460px; }
 .legend {
@@ -267,17 +314,25 @@ footer {
   </section>
 
   <section class="panel" style="--span:7">
-    <div class="titlebar"><span>confluence.score</span><span class="n">conditions met</span>
-      <span class="chips"><span class="chip gold">not a signal</span></span>
+    <div class="titlebar"><span>confluences</span><span class="n">click one to go and look at it</span>
+      <span class="chips">
+        <span class="chip none" id="scorechip">0/15</span>
+      </span>
     </div>
-    <div class="scorewrap"><span class="score" id="scoreN">0</span><span class="scoreof" id="scoreD">/ 15</span></div>
-    <div class="meter"><i id="meter" style="width:0%"></i></div>
-    <ul class="checks" id="checks"></ul>
+    <ul class="conf" id="conf"></ul>
+    <details class="checkdrop">
+      <summary>what the score counted</summary>
+      <ul class="checks" id="checks"></ul>
+    </details>
   </section>
 
   <section class="panel" style="--span:12">
-    <div class="titlebar"><span>chart.1h</span><span class="n">levels from every timeframe, overlaid</span>
+    <div class="titlebar"><span>chart</span><span class="n">switch timeframe, levels follow</span>
       <span class="chips"><span class="chip" id="pricechip">—</span></span>
+    </div>
+    <div class="tfbar">
+      <div class="tfs" id="tfs"></div>
+      <div class="toggles" id="toggles"></div>
     </div>
     <div class="chartwrap">
       <div id="chart"></div>
@@ -397,18 +452,26 @@ function render(d) {
   $("#pricechip").textContent = fmt(d.meta.price);
 
   $("#strip").hidden = true;
+  const mkt = d.meta.market || {};
   if (d.meta.synthetic) {
-    fail("Synthetic bars — a random walk, not real prices. "
+    fail("Synthetic bars, a random walk, not real prices. "
        + "Every confluence below is noise by construction.");
+  } else if (!mkt.open) {
+    // A shut market is normal. Not an error, so not red.
+    fail(mkt.detail || "Market is closed.", "info");
   } else if (d.meta.stale) {
-    fail(`Data is ${d.meta.age_label}. ${d.meta.provider === "dukascopy"
-      ? "Dukascopy publishes one file per completed hour, so it is always "
-      + "behind — fine for backtesting, not for reading a live chart."
-      : "The feed may be delayed or the market closed."}`
-      + " Levels below are correct for when the data ends, not for now.");
+    fail(`Data is ${d.meta.age_label} while the market is open. `
+       + (d.meta.provider === "dukascopy"
+          ? "Dukascopy publishes one file per completed hour, so it is always "
+          + "behind. Set TWELVEDATA_KEY for a live feed."
+          : "The feed is lagging.")
+       + " Levels are correct for when the data ends, not for now.", "warn");
   } else if (d.meta.note) {
-    fail(d.meta.note);
+    fail(d.meta.note, "warn");
   }
+
+  const cl = d.meta.cleaning;
+  if (cl && cl.removed) console.info("MPF cleaning:", cl);
 
   /* bias stack */
   const rows = [["weekly", d.bias.weekly], ["daily", d.bias.daily], ["1H", d.bias.h1]];
@@ -430,11 +493,35 @@ function render(d) {
     : `<span class="arrow ${cls(r)}">${arrow(r)}</span> ${agree} of 3 layers agree` +
       (agree === 3 ? " — full stack" : " — partial, not alignment");
 
-  /* score */
+  /* score, now a chip */
   const rep = d.report;
-  $("#scoreN").textContent = rep.score;
-  $("#scoreD").textContent = "/ " + rep.max_score;
-  $("#meter").style.width = (100 * rep.score / rep.max_score) + "%";
+  $("#scorechip").textContent = rep.score + "/" + rep.max_score;
+  $("#scorechip").className = "chip " + (rep.score >= 10 ? "gold" : "none");
+  $("#scorechip").title = "A count of conditions met. The weights are "
+    + "untested placeholders, see RULEBOOK 10.";
+
+  /* the things you can actually go and verify */
+  const items = d.confluences || [];
+  $("#conf").innerHTML = items.length
+    ? items.map(c => `<li class="${c.kind}">
+        <button data-tf="${c.tf}" data-ts="${c.ts}" data-price="${c.price}">
+          <span class="tf">${c.tf}</span>
+          <span><span class="lbl">${c.label}</span><br>
+                <span class="det">${c.detail}</span></span>
+          <span class="go">look &rarr;</span>
+        </button></li>`).join("")
+    : `<li><p class="empty" style="padding:12px">Nothing lined up.
+        No bias, or no CRT in the bias direction.</p></li>`;
+
+  $("#conf").onclick = e => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    Chart.goTo(b.dataset.tf, Number(b.dataset.ts), Number(b.dataset.price));
+    syncTabs();
+    document.querySelector(".chartwrap").scrollIntoView(
+      { behavior: "smooth", block: "center" });
+  };
+
   $("#checks").innerHTML = Object.keys(LABELS).map(k => {
     const on = rep.results[k];
     return `<li class="${on ? "on" : "off"}">
@@ -520,6 +607,34 @@ function render(d) {
   };
 
   Chart.render(d);
+  buildTabs(d);
+}
+
+const TF_ORDER = ["5m", "15m", "1h", "4h", "1d"];
+
+function buildTabs(d) {
+  const have = TF_ORDER.filter(t => d.candles && d.candles[t] && d.candles[t].length);
+  $("#tfs").innerHTML = have.map(t =>
+    `<button data-tf="${t}" aria-pressed="${t === Chart.tf()}">${t}</button>`).join("");
+  $("#tfs").onclick = e => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    Chart.setTimeframe(b.dataset.tf);
+    syncTabs();
+  };
+
+  const TYPES = [["fvg", "FVG"], ["order_block", "order blocks"], ["swing", "swings"]];
+  $("#toggles").innerHTML = TYPES.map(([k, lbl]) =>
+    `<label><input type="checkbox" data-type="${k}"
+      ${k === "swing" ? "" : "checked"}> ${lbl}</label>`).join("");
+  $("#toggles").onchange = e => {
+    if (e.target.dataset.type) Chart.toggle(e.target.dataset.type, e.target.checked);
+  };
+}
+
+function syncTabs() {
+  document.querySelectorAll("#tfs button").forEach(b =>
+    b.setAttribute("aria-pressed", String(b.dataset.tf === Chart.tf())));
 }
 
 function renderBacktest(d) {
@@ -558,9 +673,10 @@ function kv(pairs) {
 /* ---------- chart (Lightweight Charts) ---------- */
 function wireCrosshair(d) {
   const ro = $("#readout");
-  const byTime = new Map(d.candles.map(b => [b.t, b]));
   Chart.subscribeCrosshair(p => {
-    const b = p.time ? byTime.get(p.time) : null;
+    // Look up in whichever timeframe is on screen right now.
+    const bars = (d.candles || {})[Chart.tf()] || [];
+    const b = p.time ? bars.find(x => x.t === p.time) : null;
     if (!b) { ro.classList.remove("on"); return; }
     ro.classList.add("on");
     ro.textContent =
@@ -670,6 +786,13 @@ function load(params) {
   loading = true;
   $("#go").disabled = true;
   $("#go").textContent = "…";
+  // A bare ellipsis for 12 seconds reads as frozen. Say what is happening.
+  const t0 = Date.now();
+  clearInterval(window.__tick);
+  window.__tick = setInterval(() => {
+    const s = Math.round((Date.now() - t0) / 1000);
+    if (s >= 3 && loading) $("#go").textContent = s + "s";
+  }, 1000);
 
   // With the server running, /api/analyze is live. Opened as a plain file
   // it falls back to the JSON the CLI wrote.
@@ -688,7 +811,12 @@ function load(params) {
         fail(err.message);
       }
     })
-    .finally(() => { loading = false; $("#go").disabled = false; $("#go").textContent = "load"; });
+    .finally(() => {
+      loading = false;
+      clearInterval(window.__tick);
+      $("#go").disabled = false;
+      $("#go").textContent = "load";
+    });
 }
 
 const SERVED = location.protocol.startsWith("http");
@@ -703,14 +831,38 @@ function boot() {
   api("/api/catalogue")
     .then(cat => {
       const sym = $("#symbol"), tf = $("#tf");
-      sym.innerHTML = Object.entries(cat.instruments)
-        .map(([s, ps]) =>
-          `<option value="${s}"${s === "EURUSD" ? " selected" : ""}>${s} · ${ps[0]}</option>`)
-        .join("");
+      // Group by what you can actually get right now. Listing everything
+      // flat meant picking an unreachable pair looked like a broken selector
+      // when it was really a missing key.
+      const ents = Object.entries(cat.instruments);
+      const live = ents.filter(([, e]) => e.live_now);
+      const hist = ents.filter(([, e]) => e.reachable && !e.live_now);
+      const dead = ents.filter(([, e]) => !e.reachable);
+
+      const opt = ([s, e]) =>
+        `<option value="${s}"${s === "EURUSD" ? " selected" : ""}` +
+        `${e.reachable ? "" : " disabled"} title="${e.why || "live via " + e.best}">` +
+        `${s} · ${e.best}</option>`;
+      const group = (label, rows) => rows.length
+        ? `<optgroup label="${label}">` + rows.map(opt).join("") + `</optgroup>` : "";
+
+      sym.innerHTML =
+        group("live", live) +
+        group("history only (delayed)", hist) +
+        group("no key configured", dead);
+
+      window.__cat = cat.instruments;
       tf.innerHTML = cat.timeframes
         .map(t => `<option${t === "5m" ? " selected" : ""}>${t}</option>`).join("");
 
-      const go = () => load({ symbol: sym.value, tf: tf.value });
+      const go = () => {
+        const e = (window.__cat || {})[sym.value];
+        if (e && !e.reachable) {
+          fail(`${sym.value}: ${e.why}`);
+          return;
+        }
+        load({ symbol: sym.value, tf: tf.value });
+      };
       $("#go").onclick = go;
       sym.onchange = go;
       tf.onchange = go;

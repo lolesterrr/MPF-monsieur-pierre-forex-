@@ -99,6 +99,9 @@ def _authorised(environ: dict, q: dict) -> Tuple[bool, str]:
 
 def _api(path: str, q: dict) -> Tuple[int, dict]:
     if path == "/api/catalogue":
+        # Reachability is computed in providers.catalogue so the picker can
+        # grey out instruments whose provider has no key. Listing them as
+        # available made a missing key look like a broken selector.
         return 200, {"instruments": catalogue(), "timeframes": TIMEFRAMES}
 
     if path == "/api/health":
@@ -125,7 +128,10 @@ def _api(path: str, q: dict) -> Tuple[int, dict]:
         if hit and time.time() - hit[0] < CACHE_TTL:
             return 200, hit[1]
 
-        bars = get_bars(symbol, tf, count=count, provider=provider)
+        # Interactive requests get a tight budget. A long one means the
+        # dashboard sits on "…" with no explanation, which reads as frozen.
+        bars = get_bars(symbol, tf, count=count, provider=provider,
+                        budget_seconds=12.0)
 
         # SMT reference (Rulebook §8). A failure here degrades the SMT check
         # to "unmet" rather than failing the whole analysis.
@@ -140,7 +146,7 @@ def _api(path: str, q: dict) -> Tuple[int, dict]:
                 print(f"  SMT reference {ref} unavailable: {e}")
 
         payload = run(bars, anchor_hour_utc=_anchor_hour_utc(),
-                      comparison=comparison)
+                      comparison=comparison, symbol=symbol)
         payload["meta"].update(
             symbol=symbol, tf=tf, synthetic=False, provider=provider or "auto",
             smt_reference=(comparison or {}).get("symbol"),

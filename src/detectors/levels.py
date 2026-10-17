@@ -4,24 +4,34 @@ from __future__ import annotations
 
 from typing import List
 
+from ..core.market_hours import same_session
 from ..core.types import (
     Bar, Direction, Level, LevelStatus, LevelType, Timeframe,
 )
 
 
 def find_fvgs(bars: List[Bar], tf: Timeframe,
-              min_size_pips: float = 0.0) -> List[Level]:
+              min_size_pips: float = 0.0,
+              session_aware: bool = True) -> List[Level]:
     """Three-bar wick gap. Rulebook §2.1.
 
     Bullish: low[i] > high[i-2]  — gap left below
     Bearish: high[i] < low[i-2]  — gap left above
 
     Detected at bar i, which is correct: all three bars have closed.
+
+    `session_aware` skips triples that straddle a weekend. Pass False only for
+    instruments that trade continuously.
     """
     out: List[Level] = []
 
     for i in range(2, len(bars)):
         a, c = bars[i - 2], bars[i]
+
+        # A gap across a weekend is the market being shut, not a fair value
+        # gap. Left in, it produced a 66-pip phantom FVG in testing.
+        if session_aware and not same_session(a, c):
+            continue
 
         if c.low > a.high:
             size = (c.low - a.high) / 0.0001
@@ -61,6 +71,7 @@ def find_order_block_candidates(
     displacement_mult: float = 1.5,
     atr_period: int = 20,
     max_lookback: int = 10,
+    session_aware: bool = True,
 ) -> List[Level]:
     """Cast a wide net. Rulebook §2.2 — Isaiah filters these by eye.
 
@@ -77,6 +88,9 @@ def find_order_block_candidates(
 
         disp = bars[i]
         if disp.range < displacement_mult * atr:
+            continue
+        # A "displacement" that is really the weekend gap is not displacement.
+        if session_aware and not same_session(bars[i - 1], disp):
             continue
 
         if disp.is_down:

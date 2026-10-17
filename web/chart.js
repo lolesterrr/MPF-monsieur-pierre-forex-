@@ -11,7 +11,12 @@ const Chart = (() => {
 
   let chart = null, candles = null, zonePrim = null, el = null;
   let priceLines = [];
-  let state = { zones: [], asia: null, colors: {} };
+  let state = {
+    zones: [], asia: null, colors: {},
+    tf: "1h",
+    // which level types to draw — you turn off what you don't want to see
+    show: { fvg: true, order_block: true, swing: false, lines: true },
+  };
 
   /* ---- theme ---- */
   function colors() {
@@ -77,8 +82,18 @@ const Chart = (() => {
               }
             };
 
-            state.zones.forEach(z => draw(
-              z.top, z.bottom, z.ts, z.fill, z.stroke, false));
+            state.zones.forEach(z => {
+              draw(z.top, z.bottom, z.ts, z.fill, z.stroke, false);
+              // Label each zone with the timeframe it came from, so an HTF
+              // level is obvious when you are looking at a 5m chart.
+              if (!z.label) return;
+              const y = series.priceToCoordinate((z.top + z.bottom) / 2);
+              if (y == null) return;
+              ctx.font = `${Math.round(10 * vy)}px "DotGothic16", monospace`;
+              ctx.fillStyle = z.stroke;
+              ctx.textBaseline = "middle";
+              ctx.fillText(z.label, 6 * hx, y * vy);
+            });
 
             if (state.asia) {
               const a = state.asia;
@@ -169,40 +184,49 @@ const Chart = (() => {
   }
 
   /* ---- render ---- */
-  function render(d) {
+  function render(d, tf) {
     if (!chart) return;
     state.data = d;
+    if (tf) state.tf = tf;
     const c = colors();
     state.colors = c;
     const LS = LWC().LineStyle;
 
-    candles.setData(d.candles.map(b => ({
+    // candles is a map of timeframe -> bars
+    const series = (d.candles && d.candles[state.tf]) || [];
+    if (!series.length) return;
+
+    candles.setData(series.map(b => ({
       time: b.t, open: b.o, high: b.h, low: b.l, close: b.c,
     })));
 
     /* zones: HTF only, nearest price, oversized ones culled.
        Every timeframe at once is 300+ bands and the chart becomes a smear. */
-    const lo = Math.min(...d.candles.map(b => b.l));
-    const hi = Math.max(...d.candles.map(b => b.h));
+    const lo = Math.min(...series.map(b => b.l));
+    const hi = Math.max(...series.map(b => b.h));
     const span = hi - lo;
     const px = d.meta.price;
 
+    // Levels from EVERY timeframe stay on screen, so switching tabs lets you
+    // confirm an HTF level against LTF candles — the whole point of the tool.
     state.zones = d.levels
-      .filter(l => l.type !== "swing"
-                && (l.tf === "4h" || l.tf === "1d")
+      .filter(l => state.show[l.type]
                 && l.top > lo && l.bottom < hi
-                && (l.top - l.bottom) < span * 0.25)
+                && (l.top - l.bottom) < span * 0.3)
       .sort((a, b) => Math.abs((a.top + a.bottom) / 2 - px)
                     - Math.abs((b.top + b.bottom) / 2 - px))
-      .slice(0, 14)
+      .slice(0, 18)
       .map(l => ({
-        top: l.top, bottom: l.bottom, ts: l.ts,
-        fill: rgba(l.type === "fvg" ? c.crown : c.cool, 0.15),
-        stroke: rgba(l.type === "fvg" ? c.crown : c.cool, 0.55),
+        top: l.top, bottom: l.bottom, ts: l.ts, tf: l.tf, type: l.type,
+        fill: rgba(l.type === "fvg" ? c.crown : c.cool,
+                   l.tf === state.tf ? 0.22 : 0.11),
+        stroke: rgba(l.type === "fvg" ? c.crown : c.cool,
+                     l.tf === state.tf ? 0.75 : 0.35),
+        label: `${l.tf} ${l.type === "order_block" ? "OB" : l.type}`,
       }));
 
     state.asia = d.asia
-      ? { top: d.asia.high, bottom: d.asia.low, ts: d.candles[0].t }
+      ? { top: d.asia.high, bottom: d.asia.low, ts: series[0].t }
       : null;
 
     /* price lines — the library labels and keeps these pinned itself,
@@ -242,5 +266,44 @@ const Chart = (() => {
     if (chart) chart.subscribeCrosshairMove(fn);
   }
 
-  return { mount, render, theme, subscribeCrosshair, series: () => candles };
+  /** Switch timeframe without refetching. */
+  function setTimeframe(tf) {
+    if (!state.data) return;
+    state.tf = tf;
+    render(state.data, tf);
+  }
+
+  /** Turn a level type on or off. */
+  function toggle(type, on) {
+    state.show[type] = on;
+    if (state.data) render(state.data);
+  }
+
+  /** Scroll to a moment and flash a line at a price — "go and look at this". */
+  function goTo(tf, ts, price) {
+    if (!state.data) return;
+    if (tf && tf !== state.tf) setTimeframe(tf);
+
+    const ts2 = chart.timeScale();
+    const bars = (state.data.candles || {})[state.tf] || [];
+    if (ts && bars.length) {
+      const i = bars.findIndex(b => b.t >= ts);
+      if (i >= 0) {
+        const pad = Math.max(20, Math.round(bars.length * 0.12));
+        ts2.setVisibleLogicalRange({ from: i - pad, to: i + pad });
+      }
+    }
+
+    if (price != null) {
+      const flash = candles.createPriceLine({
+        price, color: state.colors.wattle || "#ff7a62",
+        lineWidth: 3, lineStyle: LWC().LineStyle.Solid,
+        axisLabelVisible: true, title: "here",
+      });
+      setTimeout(() => { try { candles.removePriceLine(flash); } catch (_) {} }, 2600);
+    }
+  }
+
+  return { mount, render, theme, subscribeCrosshair, setTimeframe, toggle,
+           goTo, tf: () => state.tf, series: () => candles };
 })();

@@ -11,6 +11,7 @@ import json
 from typing import List, Optional
 
 from .core.bias import daily_bias, h1_profile, premium_discount, weekly_bias
+from .core.market_hours import clean, market_status
 from .core.confluence import LevelPool, build_report, check_smt, mark_plp
 from .core.sessions import build_asian_ranges, classify_break
 from .core.types import Bar, Direction, Level, LevelType, Timeframe
@@ -37,6 +38,69 @@ def _swing_levels(bars: List[Bar], tf: Timeframe) -> List[Level]:
     return out
 
 
+def _confluence_list(bias, crt, plp, aligned, target, model1,
+                     asia, zone, eq) -> list:
+    """What the dashboard lists for you to verify with your own eyes.
+
+    Each entry carries the timeframe to switch to and the price to look at,
+    so clicking it takes you there instead of making you hunt.
+    """
+    items = []
+
+    if crt:
+        items.append({
+            "id": "crt", "label": f"CRT on {crt.timeframe.value}",
+            "detail": f"{crt.direction.value}, range "
+                      f"{crt.range_low:.5f}–{crt.range_high:.5f}",
+            "tf": crt.timeframe.value, "price": crt.eq, "ts": crt.c3_ts,
+            "kind": "crt",
+        })
+
+    if plp:
+        items.append({
+            "id": "plp", "label": f"PLP on {plp.timeframe.value}",
+            "detail": f"{plp.price:.5f}, "
+                      f"{'taken' if plp.is_taken else 'still resting'}",
+            "tf": plp.timeframe.value, "price": plp.price, "ts": plp.swing_ts,
+            "kind": "plp",
+        })
+
+    for i, l in enumerate(aligned or []):
+        items.append({
+            "id": f"align{i}",
+            "label": f"{l.tf if isinstance(l, dict) else l.timeframe.value} "
+                     f"{(l['type'] if isinstance(l, dict) else l.type.value).replace('_',' ')}",
+            "detail": "sits within 5 pips of the PLP",
+            "tf": l.timeframe.value, "price": l.mid, "ts": l.created_ts,
+            "kind": "aligned",
+        })
+
+    if target:
+        items.append({
+            "id": "target", "label": f"Target: {target.type.value.replace('_',' ')}",
+            "detail": f"{target.mid:.5f}, on the {zone} side of 50%",
+            "tf": target.timeframe.value, "price": target.mid,
+            "ts": target.created_ts, "kind": "target",
+        })
+
+    if model1:
+        items.append({
+            "id": "model1", "label": "Model #1 trigger",
+            "detail": f"entry {model1.entry:.5f}, stop {model1.stop:.5f}",
+            "tf": model1.timeframe.value, "price": model1.entry,
+            "ts": model1.candle_ts, "kind": "model1",
+        })
+
+    if asia:
+        items.append({
+            "id": "asia", "label": "Asian range",
+            "detail": f"{asia.low:.5f}–{asia.high:.5f} ({asia.size_pips:.0f} pips)",
+            "tf": "15m", "price": asia.eq, "ts": asia.end_ts, "kind": "asia",
+        })
+
+    return items
+
+
 def _age_label(seconds: int) -> str:
     if seconds < 120:
         return "live"
@@ -59,7 +123,8 @@ def _level_json(l: Level) -> dict:
 
 
 def run(bars_m5: List[Bar], anchor_hour_utc: int = 21,
-        comparison: Optional[dict] = None) -> dict:
+        comparison: Optional[dict] = None,
+        symbol: Optional[str] = None) -> dict:
     """Full top-down pass. Returns the dashboard payload.
 
     `comparison` carries the SMT reference series (Rulebook §8), shaped
@@ -67,6 +132,14 @@ def run(bars_m5: List[Bar], anchor_hour_utc: int = 21,
     inverted=True because it moves against EURUSD. Omit it and the SMT check
     simply reports as unmet rather than silently passing.
     """
+    # Strip weekend padding, vendor-filled flat bars and anything dated in the
+    # future. Left in, a weekend gap becomes a 66-pip "FVG" that never existed.
+    bars_m5, clean_report = clean(bars_m5, symbol)
+    if not bars_m5:
+        raise ValueError(
+            "Every bar was outside market hours or malformed. "
+            f"{clean_report.to_dict()}")
+
     tfs = {
         Timeframe.M5: bars_m5,
         Timeframe.M15: resample(bars_m5, Timeframe.M15),
@@ -194,7 +267,11 @@ def run(bars_m5: List[Bar], anchor_hour_utc: int = 21,
             "price": round(price, 5),
             "age_seconds": age_s,
             "age_label": _age_label(age_s),
-            "stale": age_s > 900,     # 15 min on a 5m strategy
+            # Only stale if the market is OPEN and the data is behind.
+            # A Friday close on a Saturday is correct, not stale.
+            "stale": age_s > 900 and market_status()["open"],
+            "market": market_status(),
+            "cleaning": clean_report.to_dict(),
         },
         "bias": {
             "weekly": {"direction": wb.direction.value, "rule": wb.rule} if wb else None,
@@ -228,11 +305,22 @@ def run(bars_m5: List[Bar], anchor_hour_utc: int = 21,
             "plp_on_edge": asia.near(plp.price) if (asia and plp) else None,
         } if asia else None,
         "levels": [_level_json(l) for l in pool.valid()],
-        "candles": [
-            {"t": b.ts, "o": b.open, "h": b.high, "l": b.low, "c": b.close}
-            for b in tfs[Timeframe.H1][-200:]
-        ],
+        # Every timeframe, so switching tabs is instant and the levels stay
+        # pinned to real price instead of being re-fetched and re-derived.
+        "candles": {
+            tf.value: [
+                {"t": b.ts, "o": b.open, "h": b.high, "l": b.low, "c": b.close}
+                for b in tfs[tf][-300:]
+            ]
+            for tf in (Timeframe.M5, Timeframe.M15, Timeframe.H1,
+                       Timeframe.H4, Timeframe.D1)
+            if tfs[tf]
+        },
+        "default_tf": Timeframe.H1.value,
         "smt": smt,
+        # Each item is something to go and LOOK at, with where to look.
+        "confluences": _confluence_list(bias, crt, plp, aligned, target,
+                                        model1, asia, zone, eq),
         "report": report.to_dict(),
     }
 

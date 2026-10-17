@@ -43,10 +43,13 @@ class Provider(ABC):
     #: most vendors cap one response; paging walks backwards in chunks
     max_per_request: int = 5000
     supports_paging: bool = False
+    #: fast enough to serve an interactive chart
+    live_capable: bool = True
 
     @abstractmethod
     def fetch(self, symbol: str, tf: str, count: int,
-              before_ts: Optional[int] = None) -> List[Bar]:
+              before_ts: Optional[int] = None,
+              deadline: Optional[float] = None) -> List[Bar]:
         ...
 
     def supports(self, symbol: str, tf: str) -> bool:
@@ -125,7 +128,7 @@ class Oanda(Provider):
     }
 
     def fetch(self, symbol: str, tf: str, count: int = 5000,
-              before_ts: Optional[int] = None) -> List[Bar]:
+              before_ts: Optional[int] = None, deadline: Optional[float] = None) -> List[Bar]:
         token = self._env("OANDA_TOKEN",
                           "Create a free practice account and generate a token.")
         host = self.HOSTS[os.environ.get("OANDA_ENV", "practice")]
@@ -174,6 +177,9 @@ class TwelveData(Provider):
         "EURUSD": "EUR/USD", "GBPUSD": "GBP/USD", "USDJPY": "USD/JPY",
         "AUDUSD": "AUD/USD", "USDCAD": "USD/CAD", "USDCHF": "USD/CHF",
         "NZDUSD": "NZD/USD", "EURGBP": "EUR/GBP",
+        # These were missing, so EURJPY fell through to a slow provider and
+        # the pair selector looked broken.
+        "EURJPY": "EUR/JPY", "GBPJPY": "GBP/JPY",
         "XAUUSD": "XAU/USD", "XAGUSD": "XAG/USD",
     }
     granularity = {
@@ -182,7 +188,7 @@ class TwelveData(Provider):
     }
 
     def fetch(self, symbol: str, tf: str, count: int = 5000,
-              before_ts: Optional[int] = None) -> List[Bar]:
+              before_ts: Optional[int] = None, deadline: Optional[float] = None) -> List[Bar]:
         key = self._env("TWELVEDATA_KEY", "Sign up at twelvedata.com for a free key.")
         q = urllib.parse.urlencode({
             "symbol": self.symbols[symbol],
@@ -244,7 +250,7 @@ class Yahoo(Provider):
              "60m": "730d", "1d": "max", "1wk": "max"}
 
     def fetch(self, symbol: str, tf: str, count: int = 5000,
-              before_ts: Optional[int] = None) -> List[Bar]:
+              before_ts: Optional[int] = None, deadline: Optional[float] = None) -> List[Bar]:
         # Yahoo's range parameter has no cursor, so paging is not available.
         sym = urllib.parse.quote(self.symbols[symbol])
         g = self.granularity[tf]
@@ -287,6 +293,7 @@ class AlphaVantage(Provider):
     No metals on the free tier.
     """
     name = "alphavantage"
+    live_capable = True
     symbols = {
         "EURUSD": ("EUR", "USD"), "GBPUSD": ("GBP", "USD"),
         "USDJPY": ("USD", "JPY"), "AUDUSD": ("AUD", "USD"),
@@ -298,7 +305,7 @@ class AlphaVantage(Provider):
                    "30m": "30min", "1h": "60min"}
 
     def fetch(self, symbol: str, tf: str, count: int = 5000,
-              before_ts: Optional[int] = None) -> List[Bar]:
+              before_ts: Optional[int] = None, deadline: Optional[float] = None) -> List[Bar]:
         key = self._env("ALPHAVANTAGE_KEY",
                         "Free key at alphavantage.co/support/#api-key")
         frm, to = self.symbols[symbol]
@@ -350,6 +357,9 @@ class Dukascopy(Provider):
     name = "dukascopy"
     supports_paging = True
     max_per_request = 100000
+    #: Far too slow for a live chart — one request per hour of history.
+    #: get_bars only falls back to it when nothing else carries the symbol.
+    live_capable = False
 
     def __init__(self):
         from .dukascopy import SYMBOLS, TF_SECONDS
@@ -357,7 +367,7 @@ class Dukascopy(Provider):
         self.granularity = {k: k for k in TF_SECONDS}
 
     def fetch(self, symbol: str, tf: str, count: int = 5000,
-              before_ts: Optional[int] = None) -> List[Bar]:
+              before_ts: Optional[int] = None, deadline: Optional[float] = None) -> List[Bar]:
         from datetime import datetime as _dt
         from .dukascopy import DukascopyError, TF_SECONDS
         from .dukascopy import fetch as duka_fetch
@@ -370,7 +380,8 @@ class Dukascopy(Provider):
         end = (_dt.fromtimestamp(before_ts, tz=timezone.utc)
                if before_ts else None)
         try:
-            return duka_fetch(symbol, tf, days=days, end=end, quiet=True)[-count:]
+            return duka_fetch(symbol, tf, days=days, end=end, quiet=True,
+                              deadline=deadline)[-count:]
         except DukascopyError as e:
             raise ProviderError(f"dukascopy: {e}") from e
 
@@ -395,12 +406,48 @@ def available(symbol: str, tf: str) -> List[str]:
     return [p.name for p in PROVIDERS if p.supports(symbol, tf)]
 
 
-def catalogue() -> Dict[str, List[str]]:
-    """Every instrument this build can reach, and who serves it."""
-    out: Dict[str, List[str]] = {}
+def is_configured(p: "Provider") -> bool:
+    """Does this provider have what it needs to actually answer?
+
+    Keyless sources are always configured; keyed ones need their variable set.
+    """
+    needs = {"oanda": "OANDA_TOKEN",
+             "twelvedata": "TWELVEDATA_KEY",
+             "alphavantage": "ALPHAVANTAGE_KEY"}
+    key = needs.get(p.name)
+    return True if key is None else bool(os.environ.get(key))
+
+
+def catalogue() -> Dict[str, dict]:
+    """Every instrument, who serves it, and whether it is reachable NOW.
+
+    The picker used to list the union of every provider's symbols, including
+    ones whose keys are not set. Picking one of those looked like a broken
+    selector when it was really a missing key, so reachability is reported
+    per instrument rather than left for the user to discover by clicking.
+    """
+    out: Dict[str, dict] = {}
     for p in PROVIDERS:
+        ready = is_configured(p)
         for s in p.symbols:
-            out.setdefault(s, []).append(p.name)
+            e = out.setdefault(s, {"providers": [], "live": [], "history": []})
+            e["providers"].append(p.name)
+            if not ready:
+                continue
+            (e["live"] if p.live_capable else e["history"]).append(p.name)
+
+    for s, e in out.items():
+        e["reachable"] = bool(e["live"] or e["history"])
+        e["live_now"] = bool(e["live"])
+        e["best"] = (e["live"] or e["history"] or e["providers"])[0]
+        if not e["reachable"]:
+            e["why"] = ("no key set for " + ", ".join(e["providers"]))
+        elif not e["live_now"]:
+            e["why"] = ("history only via " + ", ".join(e["history"])
+                        + " — delayed, not a live quote")
+        else:
+            e["why"] = ""
+
     return dict(sorted(out.items()))
 
 
@@ -444,7 +491,8 @@ def get_history(symbol: str, tf: str = "5m", pages: int = 6,
 
 
 def get_bars(symbol: str, tf: str = "5m", count: int = 5000,
-             provider: Optional[str] = None) -> List[Bar]:
+             provider: Optional[str] = None,
+             budget_seconds: float = 25.0) -> List[Bar]:
     """Fetch bars, trying each provider that supports the instrument.
 
     A provider missing its key is skipped, not fatal — the next one gets a go.
@@ -452,21 +500,38 @@ def get_bars(symbol: str, tf: str = "5m", count: int = 5000,
     reason is the worst possible failure here.
     """
     symbol = symbol.upper()
-    chain = [BY_NAME[provider]] if provider else \
-        [p for p in PROVIDERS if p.supports(symbol, tf)]
+    if provider:
+        chain = [BY_NAME[provider]]
+    else:
+        supported = [p for p in PROVIDERS if p.supports(symbol, tf)]
+        # Try the fast providers first; fall back to slow ones only if no fast
+        # provider carries this symbol at all.
+        fast = [p for p in supported if p.live_capable]
+        chain = fast + [p for p in supported if not p.live_capable]
 
     if not chain:
         raise ProviderError(
             f"No provider covers {symbol} at {tf}. Known: "
             f"{', '.join(catalogue())}")
 
+    # A time budget for the WHOLE chain. Without it, one unreachable provider
+    # retrying with backoff holds the request open and the dashboard looks
+    # frozen — which is exactly what happened in testing when a host was
+    # blocked: 128 connection attempts and a page that never loaded.
+    import time as _time
+    deadline = _time.monotonic() + budget_seconds
+
     errors = []
     for p in chain:
         if not p.supports(symbol, tf):
             errors.append(f"{p.name}: does not carry {symbol} at {tf}")
             continue
+        left = deadline - _time.monotonic()
+        if left <= 0:
+            errors.append(f"{p.name}: skipped, {budget_seconds}s budget spent")
+            continue
         try:
-            bars = p.fetch(symbol, tf, count)
+            bars = p.fetch(symbol, tf, count, deadline=deadline)
             if bars:
                 return bars
             errors.append(f"{p.name}: returned no bars")

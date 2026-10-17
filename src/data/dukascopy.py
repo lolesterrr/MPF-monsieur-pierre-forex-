@@ -26,6 +26,10 @@ from __future__ import annotations
 
 import lzma
 import struct
+import time as _time
+import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -82,18 +86,40 @@ def _url(symbol: str, when: datetime) -> str:
             f"{when.day:02d}/{when.hour:02d}h_ticks.bi5")
 
 
-def _fetch_hour(symbol: str, when: datetime, timeout: int = 30) -> bytes:
-    req = urllib.request.Request(_url(symbol, when),
-                                 headers={"User-Agent": "Mozilla/5.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.read()
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return b""          # market closed that hour — normal, not an error
-        raise DukascopyError(f"HTTP {e.code} for {symbol} {when:%Y-%m-%d %Hh}") from e
-    except Exception as e:
-        raise DukascopyError(f"{type(e).__name__} fetching {symbol}: {e}") from e
+def _fetch_hour(symbol: str, when: datetime, timeout: int = 30,
+                retries: int = 4) -> bytes:
+    """One hour of ticks, with backoff.
+
+    503 and 429 mean we are asking too fast, not that the data is missing.
+    Hammering straight through produced "21 failures, giving up" on a perfectly
+    good symbol. Backing off fixes it.
+    """
+    url = _url(symbol, when)
+    delay = 1.0
+
+    for attempt in range(retries):
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return b""      # market shut that hour — normal, not an error
+            if e.code in (429, 500, 502, 503, 504) and attempt < retries - 1:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            raise DukascopyError(
+                f"HTTP {e.code} for {symbol} {when:%Y-%m-%d %Hh}") from e
+        except Exception as e:
+            if attempt < retries - 1:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            raise DukascopyError(
+                f"{type(e).__name__} fetching {symbol}: {e}") from e
+
+    return b""
 
 
 def _decode_ticks(raw: bytes, hour_start: datetime, symbol: str) -> List[dict]:
@@ -173,7 +199,8 @@ TF_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800,
 
 
 def fetch(symbol: str, tf: str = "5m", days: int = 30,
-          end: Optional[datetime] = None, quiet: bool = False) -> List[Bar]:
+          end: Optional[datetime] = None, quiet: bool = False,
+          workers: int = 8, deadline: Optional[float] = None) -> List[Bar]:
     """Download `days` of history and aggregate to `tf`.
 
     One HTTP request per hour of history, so 30 days is ~720 requests. Slow
@@ -191,33 +218,77 @@ def fetch(symbol: str, tf: str = "5m", days: int = 30,
         minute=0, second=0, microsecond=0)
     start = end - timedelta(days=days)
 
-    ticks: List[dict] = []
+    # Only hours the market was actually open.
+    from ..core.market_hours import is_open
+    wanted: List[datetime] = []
     cursor = start
-    hours = fails = 0
-
     while cursor < end:
-        # Saturday after 21:00 and Sunday before 21:00 UTC: market shut.
-        if not (cursor.weekday() == 5 or
-                (cursor.weekday() == 6 and cursor.hour < 21)):
-            try:
-                raw = _fetch_hour(symbol, cursor)
-                if raw:
-                    ticks.extend(_decode_ticks(raw, cursor, symbol))
-                hours += 1
-            except DukascopyError as e:
-                fails += 1
-                if fails > 20:
-                    raise DukascopyError(
-                        f"{fails} consecutive-ish failures, giving up: {e}") from e
+        if is_open(int(cursor.timestamp())):
+            wanted.append(cursor)
         cursor += timedelta(hours=1)
 
-        if not quiet and hours and hours % 120 == 0:
-            print(f"    {hours}h fetched, {len(ticks)} ticks")
+    if not wanted:
+        raise DukascopyError(
+            f"No open market hours in the last {days} days for {symbol}.")
+
+    ticks: List[dict] = []
+    failures: List[str] = []
+
+    def one(when: datetime):
+        try:
+            raw = _fetch_hour(symbol, when)
+            return _decode_ticks(raw, when, symbol) if raw else []
+        except DukascopyError as e:
+            failures.append(str(e))
+            return []
+
+    # Sequential fetching of 700+ hours is unusable. Modest concurrency keeps
+    # it polite — the backoff above handles any 503 that still slips through.
+    # `deadline` is a time.monotonic() value. Honouring it matters: an
+    # unreachable host retried with backoff across 700 hours will hold a web
+    # request open until the browser gives up, and the app just looks frozen.
+    stopped_early = False
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
+        futures = [pool.submit(one, w) for w in wanted]
+        for n, fut in enumerate(futures, start=1):
+            if deadline is not None and _time.monotonic() > deadline:
+                stopped_early = True
+                break
+            # Give each future only the time that is actually left, so one
+            # hanging connection cannot eat the whole budget by itself.
+            left = None if deadline is None else max(
+                0.1, deadline - _time.monotonic())
+            try:
+                ticks.extend(fut.result(timeout=left))
+            except FuturesTimeout:
+                stopped_early = True
+                break
+            if not quiet and n % 120 == 0:
+                print(f"    {n}/{len(wanted)} hours, {len(ticks)} ticks")
+    finally:
+        # cancel_futures matters: plain shutdown() waits for every queued
+        # task, which is how a 6s budget turned into 16s in testing.
+        pool.shutdown(wait=False, cancel_futures=True)
+
+    # Judge on the proportion that failed, not a running count. The old
+    # counter never reset on success, so a long pull with scattered blips
+    # tripped a "21 consecutive failures" error that was never consecutive.
+    if failures and len(failures) > max(10, len(wanted) * 0.25):
+        raise DukascopyError(
+            f"{len(failures)} of {len(wanted)} hours failed for {symbol}. "
+            f"First: {failures[0]}")
+
+    if stopped_early and not ticks:
+        raise DukascopyError(
+            f"{symbol}: ran out of time before any data arrived. The feed is "
+            f"slow or unreachable from here; try a keyed provider for live use.")
 
     if not ticks:
         raise DukascopyError(
-            f"No ticks for {symbol} over {days} days. Either the symbol code "
-            f"is wrong or the feed is unreachable from here.")
+            f"No ticks for {symbol} over {days} days "
+            f"({len(failures)} request failures). Either the symbol code is "
+            f"wrong or the feed is unreachable from here.")
 
     return _to_bars(ticks, TF_SECONDS[tf])
 
