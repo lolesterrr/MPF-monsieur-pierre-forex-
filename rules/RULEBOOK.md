@@ -284,6 +284,32 @@ placeholders.** They mean nothing until backtested. Do not treat the number as a
 
 ---
 
+## 10.5 Research notes — where your doc differs from the common teaching
+
+Checked against public CRT write-ups (LuxAlgo's concept library, ICT lecture material).
+Your doc wins on every disagreement; these are logged so the difference is deliberate.
+
+| Topic | Common teaching | Your doc | Code follows |
+|---|---|---|---|
+| Stop placement | Beyond **C2's** extreme (the manipulation candle) | Beyond the **entry candle** (Model #1) | Your doc |
+| C1 range | High/low **including wicks** | unstated | wicks — agrees |
+| C2 close | Must close back inside; a close beyond = acceptance, CRT void | unstated | close inside required — agrees |
+| T1 / T2 | C1's 50%, then C1's opposite extreme | same | agrees |
+| Entry timing | LTF, 15m–1H against a daily range | 1H for daily, 15M for 4H | agrees |
+
+**On stops.** Yours is tighter than the common version. Tighter stop, better R per trade,
+more stop-outs. Worth measuring both in v2 rather than assuming — it's a one-line change.
+
+**On PLP.** The concept your doc describes — a high/low taken out that looks like a
+structure shift but is a liquidity grab — is what ICT material calls a *liquidity purge
+and revert* (also turtle soup). That is a description of what price did afterwards, so
+it stays un-codeable as stated. §6's "nearest unswept swing on the opposite side" is the
+best *before-the-fact* proxy, and it is the right shape: a resting pool of stops.
+
+**Caveat worth repeating.** CRT is taught, not published. There is no independent study
+testing it, and every teacher's version differs. That is exactly why §12's out-of-sample
+step is not optional.
+
 ## 11. Open — your doc flags these itself
 
 1. **What invalidates a bias mid-week / mid-day?** Currently a bias persists until the
