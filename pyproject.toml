@@ -5,5 +5,5 @@ description = "Monsieur Pierre's Forex — multi-timeframe confluence tooling"
 requires-python = ">=3.11"
 dependencies = []          # stdlib only, deliberately
 
-[tool.vercel]
-entrypoint = "app:app"
+# No [tool.vercel] entrypoint: this project uses the api/ directory style,
+# where Vercel discovers api/index.py by file. Declaring both conflicts.

@@ -76,8 +76,18 @@ environment, and that a real analysis comes back with fresh data.
 If it reports `API answered WITHOUT a key`, stop and fix that before leaving the
 instance up.
 
-`vercel.json` and `.python-version` are already in the repo. Vercel finds `app`
-in `app.py` by itself.
+`vercel.json`, `api/index.py` and `.python-version` are already in the repo.
+
+**How the routing works**, in case you need to debug it: Vercel's Python runtime
+discovers functions *by file inside `api/`*, so the entrypoint is
+`api/index.py`, and `vercel.json` rewrites every path to it. That one function
+serves both the dashboard and the API, because `src/wsgi.py` handles static
+files too.
+
+A `functions` pattern pointing at a root-level `app.py` does **not** work — the
+build fails with `[unused_function] The pattern "app.py" ... doesn't match any
+Serverless Functions inside the api directory`. `app.py` is still in the repo,
+but only for gunicorn on Render.
 
 **What it costs you:** nothing, within 1M invocations and 100 GB transfer a
 month. One person clicking a dashboard will not come close.
