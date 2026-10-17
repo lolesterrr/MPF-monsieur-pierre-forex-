@@ -261,6 +261,8 @@ const Chart = (() => {
     // confirm an HTF level against LTF candles — the whole point of the tool.
     state.zones = d.levels
       .filter(l => state.show[l.type]
+                && !(state.strict && l.type === "order_block"
+                     && (l.meta || {}).strength === "weak")
                 && l.top > lo && l.bottom < hi
                 && (l.top - l.bottom) < span * 0.3)
       .sort((a, b) => Math.abs((a.top + a.bottom) / 2 - px)
@@ -326,6 +328,13 @@ const Chart = (() => {
   /** Turn a level type on or off. */
   function toggle(type, on) {
     state.show[type] = on;
+    if (state.data) render(state.data);
+  }
+
+  /* Strict mode: only draw order blocks whose displacement broke structure.
+     The payload always carries both, so this is a filter, not a refetch. */
+  function setStrict(on) {
+    state.strict = !!on;
     if (state.data) render(state.data);
   }
 
@@ -427,5 +436,5 @@ const Chart = (() => {
   }
 
   return { mount, render, theme, subscribeCrosshair, setTimeframe, toggle,
-           goTo, clearFocus, tf: () => state.tf, series: () => candles };
+           goTo, clearFocus, setStrict, tf: () => state.tf, series: () => candles };
 })();

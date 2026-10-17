@@ -84,8 +84,16 @@ Per your call — cast wide, you filter by eye.
    prints the matched rule next to every candidate — so a weak one is visible
    as weak rather than asserted as an "order block".
 
-   If you want it stricter, the single highest-value addition is requiring the
-   displacement to take out a prior swing. Say the word and it becomes a flag.
+   **Strict mode** does exactly that: every candidate records whether its
+   displacement took out a confirmed prior swing (`broke_structure`), and the
+   dashboard's "strict OBs" switch hides the ones that did not. Both sets are
+   always in the payload, so flipping the switch filters rather than refetches
+   and you can compare the two instantly.
+
+   On synthetic data roughly **47%** of candidates break structure, so strict
+   mode about halves them. Whether that half is the better half is a question
+   for the backtest, not for me — run it both ways with `min_score` held
+   constant and compare out-of-sample expectancy.
 
 6. **Sweep without close does NOT invalidate.** Wick-through is expected behaviour.
 7. Each candidate gets a stable `id` so you can accept/reject it and the choice persists.

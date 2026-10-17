@@ -196,6 +196,11 @@ button.ghost.sm { font-size: 12px; padding: 2px 8px; }
   align-items: center; gap: 5px; cursor: pointer; color: var(--ink-soft);
 }
 .toggles input { accent-color: var(--crown-deep); }
+.toggles .strict { color: var(--ink); font-weight: 700; }
+.conf .weak {
+  font-family: var(--f-pixel); font-size: 10.5px; margin-left: 5px;
+  padding: 1px 5px; border: 1px solid var(--wattle); color: var(--wattle);
+}
 
 .focusbar {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
@@ -333,6 +338,7 @@ footer {
   <section class="panel" style="--span:7">
     <div class="titlebar"><span>confluences</span><span class="n">click one to go and look at it</span>
       <span class="chips">
+        <span class="n" id="strictnote"></span>
         <span class="chip none" id="scorechip">0/15</span>
       </span>
     </div>
@@ -519,15 +525,24 @@ function render(d) {
   $("#scorechip").title = "A count of conditions met. The weights are "
     + "untested placeholders, see RULEBOOK 10.";
 
+
   /* the things you can actually go and verify */
-  const items = d.confluences || [];
+  const items = (d.confluences || []).filter(
+    c => !(STRICT && c.strength === "weak"));
+  const hidden = (d.confluences || []).length - items.length;
+  // Declared above this line — assigning it earlier threw a temporal dead
+  // zone error that silently killed the whole render.
+  $("#strictnote").textContent = !STRICT ? ""
+    : hidden ? `strict: ${hidden} weak hidden`
+             : "strict: nothing weak to hide";
   $("#conf").innerHTML = items.length
     ? items.map(c => `<li class="${c.kind}">
         <button data-tf="${c.tf}" data-ts="${c.ts}" data-price="${c.price}" data-short="${(c.short || c.label || "").replace(/"/g, "")}"
           ${c.top != null ? `data-top="${c.top}" data-bottom="${c.bottom}"` : ""}
           data-why="${(c.why || "").replace(/"/g, "&quot;")}"
           data-rule="${(c.rule || "").replace(/"/g, "&quot;")}">
-          <span class="tf">${c.tf}</span>
+          <span class="tf">${c.tf}</span>${c.strength === "weak"
+            ? `<span class="weak" title="displacement did not break structure">weak</span>` : ""}
           <span><span class="lbl">${c.label}</span><br>
                 <span class="det">${c.detail}</span></span>
           <span class="go">look &rarr;</span>
@@ -673,8 +688,19 @@ function buildTabs(d) {
     const on = k in saved ? saved[k] : def;
     Chart.toggle(k, on);
     return `<label><input type="checkbox" data-type="${k}"${on ? " checked" : ""}> ${lbl}</label>`;
-  }).join("") + `<button class="ghost sm" id="allon">all</button>`
-             + `<button class="ghost sm" id="alloff">none</button>`;
+  }).join("")
+    + `<label class="strict" title="Hide order blocks whose displacement did `
+    + `not take out a prior swing. Roughly halves the candidates.">`
+    + `<input type="checkbox" id="strict"${STRICT ? " checked" : ""}> strict OBs</label>`
+    + `<button class="ghost sm" id="allon">all</button>`
+    + `<button class="ghost sm" id="alloff">none</button>`;
+
+  $("#strict").onchange = e => {
+    STRICT = e.target.checked;
+    try { localStorage.setItem("mpf-strict", STRICT ? "1" : "0"); } catch (_) {}
+    Chart.setStrict(STRICT);
+    if (window.__data) render(window.__data);
+  };
 
   const persist = () => {
     const s = {};
@@ -926,6 +952,12 @@ function load(params) {
 const SERVED = location.protocol.startsWith("http");
 // Pip size for the focus readout. JPY pairs and metals are not 0.0001.
 let PIPSZ = 0.0001;
+/* Strict mode hides order blocks whose displacement did not break structure.
+   Both sets are always in the payload, so this filters rather than refetches
+   and you can flip between them instantly to compare. */
+let STRICT = (() => {
+  try { return localStorage.getItem("mpf-strict") === "1"; } catch (_) { return false; }
+})();
 
 function boot() {
   if (!SERVED) {

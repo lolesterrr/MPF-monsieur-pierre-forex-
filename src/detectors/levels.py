@@ -86,7 +86,33 @@ def find_order_block_candidates(
     1. Bar i is a displacement bar if its range >= mult * ATR20(prior bars)
     2. Walk back up to `max_lookback` bars for the nearest opposite-close bar
     3. Zone = that bar's full high-low
+
+    Every candidate also records whether its displacement **broke structure** —
+    took out a confirmed swing in the direction it moved. That is the single
+    strongest filter available, so rather than two detection passes the flag is
+    computed once and the UI filters on it. You can see both sets and compare
+    instead of guessing which rule is better.
     """
+    from .swings import find_swings
+
+    swings = find_swings(bars)
+    highs = [s for s in swings if s.is_high]
+    lows = [s for s in swings if not s.is_high]
+
+    def broke(idx: int, upward: bool):
+        """Did bar `idx` take out the nearest swing CONFIRMED before it?
+
+        Confirmation matters: a swing is not knowable until n bars after it
+        forms, so using an unconfirmed one would be lookahead.
+        """
+        pool = highs if upward else lows
+        prior = [s for s in pool if s.confirmed_index < idx]
+        if not prior:
+            return False, None
+        s = prior[-1]
+        hit = bars[idx].high > s.price if upward else bars[idx].low < s.price
+        return hit, s.price
+
     out: List[Level] = []
 
     for i in range(atr_period, len(bars)):
@@ -107,6 +133,8 @@ def find_order_block_candidates(
             want_up, direction = False, Direction.BULLISH
         else:
             continue  # doji displacement — no directional read
+
+        struct_hit, struct_px = broke(i, upward=disp.is_up)
 
         for back in range(1, max_lookback + 1):
             j = i - back
@@ -130,8 +158,15 @@ def find_order_block_candidates(
                             f"{'down' if cand.is_down else 'up'}-close candle, "
                             f"then a {disp.range / atr:.1f}x ATR "
                             f"{'up' if disp.is_up else 'down'} move "
-                            f"{back} bar{'s' if back > 1 else ''} later"),
+                            f"{back} bar{'s' if back > 1 else ''} later"
+                            + (f", taking out the swing at {struct_px:.5f}"
+                               if struct_hit else
+                               ", which did NOT break structure")),
                         "rule": "RULEBOOK 2.2 — displacement >= 1.5x ATR20",
+                        "broke_structure": struct_hit,
+                        "swing_taken": (round(struct_px, 5)
+                                        if struct_px is not None else None),
+                        "strength": "strong" if struct_hit else "weak",
                         # UI sets this; None = you haven't judged it yet
                         "accepted": None,
                     },

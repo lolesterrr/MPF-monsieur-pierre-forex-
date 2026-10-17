@@ -121,6 +121,14 @@ at 5m candles.
 The checkboxes hide level types. When the chart is a mess, turn swings off
 first.
 
+**strict OBs** is different from the others — it filters rather than hides.
+It drops order blocks whose displacement never took out a prior swing, which
+is roughly half of them. Weak ones carry a `weak` badge when strict is off, so
+you can see what would disappear before committing to it.
+
+Neither setting is "correct" yet. Run the backtest both ways and let the
+out-of-sample number decide.
+
 ---
 
 ## The part that decides whether any of this is real

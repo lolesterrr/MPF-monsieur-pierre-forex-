@@ -82,6 +82,7 @@ def _confluence_list(bias, crt, plp, aligned, target, model1,
             "top": l.top, "bottom": l.bottom,
             "why": l.meta.get("why", ""),
             "rule": l.meta.get("rule", ""),
+            "strength": l.meta.get("strength", "strong"),
         })
 
     if target:
