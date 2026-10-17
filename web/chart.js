@@ -14,8 +14,16 @@ const Chart = (() => {
   let state = {
     zones: [], asia: null, colors: {},
     tf: "1h",
-    // which level types to draw — you turn off what you don't want to see
-    show: { fvg: true, order_block: true, swing: false, lines: true },
+    // Which things to draw. Every key here is read in render() — a key that
+    // nothing reads is a switch that does nothing, which is exactly the bug
+    // the asia/crt/plp/eq entries were in before.
+    show: {
+      fvg: true, order_block: true, swing: false,
+      asia: true, crt: true, plp: true, eq: true,
+    },
+    // Order blocks you looked at and rejected. Your judgement outranks the
+    // detector's, so a dropped block leaves the chart entirely.
+    dropped: {},
   };
 
   /* ---- theme ---- */
@@ -263,6 +271,7 @@ const Chart = (() => {
       .filter(l => state.show[l.type]
                 && !(state.strict && l.type === "order_block"
                      && (l.meta || {}).strength === "weak")
+                && !state.dropped[l.id]
                 && l.top > lo && l.bottom < hi
                 && (l.top - l.bottom) < span * 0.3)
       .sort((a, b) => Math.abs((a.top + a.bottom) / 2 - px)
@@ -277,7 +286,14 @@ const Chart = (() => {
         label: `${l.tf} ${l.type === "order_block" ? "OB" : l.type}`,
       }));
 
-    state.asia = d.asia
+    /* The switches above the chart used to gate ONLY the shaded bands, because
+       that filter is the only place state.show was ever read. Everything drawn
+       as a price line — asia, CRT, PLP, entry, stop, daily 50% — ignored them,
+       so four of the seven checkboxes moved and did nothing at all. One test
+       per group, here, is the whole fix. */
+    const vis = k => state.show[k] !== false;
+
+    state.asia = (d.asia && vis("asia"))
       ? { top: d.asia.high, bottom: d.asia.low, ts: series[0].t }
       : null;
 
@@ -296,22 +312,34 @@ const Chart = (() => {
       }));
     };
 
-    if (d.zone) line(d.zone.eq, c.deep, "eq 50%", LS.Dashed);
-    if (d.plp) line(d.plp.price, c.wattle, "PLP", LS.Dotted);
-    if (d.crt) {
+    if (d.zone && vis("eq")) line(d.zone.eq, c.deep, "eq 50%", LS.Dashed);
+    if (d.plp && vis("plp")) line(d.plp.price, c.wattle, "PLP", LS.Dotted);
+    if (d.crt && vis("crt")) {
       line(d.crt.eq, c.crown, "crt 50% · T1", LS.Dashed);
       line(d.crt.opposing, c.crown, "crt T2", LS.LargeDashed);
     }
-    if (d.model1) {
+    // Entry and stop belong to the PLP switch — its label says so.
+    if (d.model1 && vis("plp")) {
       line(d.model1.entry, c.ink, "entry");
       line(d.model1.stop, c.wattle, "stop", LS.Dashed);
     }
-    if (d.asia) {
+    if (d.asia && vis("asia")) {
       line(d.asia.high, c.soft, "asia H", LS.SparseDotted);
       line(d.asia.low, c.soft, "asia L", LS.SparseDotted);
     }
 
-    chart.timeScale().fitContent();
+    /* fitContent() crushed a few thousand bars into a smear against the right
+       edge, and it fired on EVERY re-render — so flicking a switch threw away
+       wherever you had panned to. Only reset the view when the bars underneath
+       actually changed, and open on the recent end, where the decision is. */
+    const key = state.tf + ":" + series.length + ":" + series[0].t;
+    if (key !== state.viewKey) {
+      state.viewKey = key;
+      const span = Math.min(series.length, 160);
+      chart.timeScale().setVisibleLogicalRange({
+        from: series.length - span, to: series.length + 6,
+      });
+    }
   }
 
   function subscribeCrosshair(fn) {
@@ -338,6 +366,29 @@ const Chart = (() => {
     if (state.data) render(state.data);
   }
 
+  /** Order blocks you dropped in the queue, by level id. Store only — the
+      page sets this immediately before its own render() call. */
+  function setDropped(map) {
+    state.dropped = map || {};
+  }
+
+  /* Where the focused candle sits on screen right now, in viewport pixels.
+     Pierre walks there, so he becomes a third cue for "which candle" on top
+     of the marker and the column. Null when nothing is focused or the chart
+     has scrolled out of sight — he just goes back to his own business. */
+  function focusPoint() {
+    if (!chart || !el || !state.focus) return null;
+    const x = chart.timeScale().timeToCoordinate(state.focus.ts);
+    if (x == null) return null;
+    const r = el.getBoundingClientRect();
+    if (r.bottom < 40 || r.top > innerHeight - 40) return null;
+    const z = state.focus.zone;
+    const at = z ? (z.top + z.bottom) / 2 : state.focus.price;
+    let y = at != null ? candles.priceToCoordinate(at) : null;
+    if (y == null) y = r.height / 2;
+    return { x: r.left + x, y: r.top + y };
+  }
+
   /** Scroll to a moment and flash a line at a price — "go and look at this". */
   /* Jump to a confluence AND make it obvious which candle it is.
      Three cues, because one was not enough: a labelled marker on the bar, a
@@ -359,8 +410,18 @@ const Chart = (() => {
     const bars = (state.data.candles || {})[state.tf] || [];
     if (!bars.length) return null;
 
+    /* If the moment is not in the window, SAY SO. The old code clamped a
+       missing timestamp to bar 0 or the last bar and carried on, so the focus
+       bar then described a candle that had nothing to do with the level you
+       clicked — specific, confident and wrong. The server now sizes the window
+       to cover its own levels, but a deep history can still outrun it. */
     let idx = 0;
     if (ts) {
+      if (ts < bars[0].t || ts > bars[bars.length - 1].t) {
+        clearFocus();   // don't leave the previous selection lit up
+        return { bar: null, offWindow: true, tf: state.tf,
+                 first: bars[0].t, last: bars[bars.length - 1].t };
+      }
       idx = bars.findIndex(b => b.t >= ts);
       if (idx < 0) idx = bars.length - 1;
       if (idx > 0 && bars[idx].t > ts) idx -= 1;
@@ -375,6 +436,7 @@ const Chart = (() => {
     const c = state.colors;
     state.focus = {
       ts: bar.t,
+      price: price,
       fill: rgba(c.crown, 0.10),
       stroke: rgba(c.crown, 0.8),
       zone: isZone ? { top: zone.top, bottom: zone.bottom } : null,
@@ -436,5 +498,6 @@ const Chart = (() => {
   }
 
   return { mount, render, theme, subscribeCrosshair, setTimeframe, toggle,
-           goTo, clearFocus, setStrict, tf: () => state.tf, series: () => candles };
+           goTo, clearFocus, setStrict, setDropped, focusPoint,
+           tf: () => state.tf, series: () => candles };
 })();

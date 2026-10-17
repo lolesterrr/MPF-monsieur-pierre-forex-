@@ -10,9 +10,12 @@ untested placeholders (RULEBOOK §10). Treat it as an index, not a verdict.
 
 1. Read `bias.stack`. No bias means no trades — your own doc says so.
 2. Read the `confluences` list. Each row is a thing to go and verify.
-3. Click **look →** on a row. The chart switches to that timeframe, scrolls to
-   the moment, **marks the exact candle** with an arrow and a highlighted
-   column, and the bar above names it: time, OHLC, and the level's price.
+3. Click **look →** on a row — in the `confluences` list or the
+   `orderblock.queue`. The chart switches to that timeframe, scrolls to the
+   moment, **marks the exact candle** with a highlighted column, draws regions
+   as regions and single prices as lines, and the bar above names it: time,
+   OHLC, the level's edges, and why the rule fired. Monsieur Pierre walks over
+   and sits on it.
 4. Decide with your own eyes whether the thing is real.
 5. If you take it, log it. That is how the weights eventually get replaced
    with measured numbers instead of my guesses.
@@ -59,8 +62,17 @@ Four rows, 12/15, and when you click through them it is one cluster of chop
 counted four times.
 
 **This is the main failure mode of the whole tool.** The order block detector
-casts deliberately wide because you said you would judge them. Go to the
-`orderblock.queue` panel and **drop** the junk. They stop inflating the count.
+casts deliberately wide because you said you would judge them.
+
+Go to the `orderblock.queue` panel. Every row there is clickable, the same as
+a confluence row: **look →** puts the chart on that timeframe, draws the block
+as a band, marks its origin candle, and the focus bar tells you *why* the rule
+fired on it. Decide, then hit **keep** or **drop**.
+
+A dropped block is gone — off the chart, out of the confluence list, out of
+the count. The note under the list says how many you removed, so a low score
+you argued down still looks different from a low score the data handed you.
+Verdicts persist per browser, so yesterday's judgements are still there today.
 
 A 12 made of one real level wearing four hats is weaker than a 7 made of three
 separate ones.
@@ -113,13 +125,21 @@ Rule of thumb: if price is already past the first exit, the setup is spent.
 | `4h` text on a band | which timeframe that level came from |
 | Dashed lines | daily 50%, CRT exits |
 | Dotted red | PLP, stop |
+| Monsieur Pierre | sitting at the candle you selected |
 
 Timeframe tabs switch the candles; **the levels follow you across** and keep
 their source-timeframe label. That is the point: see a 4H level while looking
 at 5m candles.
 
-The checkboxes hide level types. When the chart is a mess, turn swings off
-first.
+The checkboxes hide what you are not looking at. All seven of them work —
+`asia`, `crt`, `plp` and `daily 50%` used to be wired to nothing, because the
+only place the switches were read was the filter that draws the shaded bands,
+and those four are price lines. When the chart is a mess, turn swings off
+first. `all` / `none` do not touch strict mode.
+
+If a level formed before the loaded window starts, the focus bar says so
+rather than scrolling to the nearest bar it has. It used to land on bar 0 and
+read out that candle's OHLC as if it were the one you asked for.
 
 **strict OBs** is different from the others — it filters rather than hides.
 It drops order blocks whose displacement never took out a prior swing, which
@@ -128,6 +148,24 @@ you can see what would disappear before committing to it.
 
 Neither setting is "correct" yet. Run the backtest both ways and let the
 out-of-sample number decide.
+
+---
+
+## Monsieur Pierre
+
+He is a status light with opinions, not decoration.
+
+| What he does | What it means |
+|---|---|
+| Walks to a candle and sits | the thing you just clicked is *there* |
+| Asleep, bottom of the screen | market is shut, or the feed is stale — nothing on screen is current |
+| Sitting hunched | no bias resolved, so your doc says no trades |
+| Sitting up alert | the stack agrees and the score is 10+ |
+| Follows your cursor | nothing to report |
+
+When he is asleep, believe him over the chart. A full set of levels on stale
+data looks exactly like a full set of levels on live data, and that is the
+expensive mistake this whole panel exists to stop.
 
 ---
 

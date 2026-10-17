@@ -25,6 +25,8 @@ jobs:
         run: python3 tests/test_lifecycle.py
       - name: Market hours tests
         run: python3 tests/test_market_hours.py
+      - name: Payload tests
+        run: python3 tests/test_payload.py
       - name: Import check
         run: python3 -c "from app import app; assert callable(app)"
 

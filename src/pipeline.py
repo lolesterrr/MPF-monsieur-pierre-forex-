@@ -71,6 +71,10 @@ def _confluence_list(bias, crt, plp, aligned, target, model1,
     for i, l in enumerate(aligned or []):
         items.append({
             "id": f"align{i}",
+            # The underlying level's own id, so a block you reject in the
+            # queue disappears from this list too instead of going on
+            # inflating the count from a panel you already disagreed with.
+            "level_id": l.id,
             "short": (l.type.value.replace("_", " ")
                       if not isinstance(l, dict) else l["type"]),
             "label": f"{l.tf if isinstance(l, dict) else l.timeframe.value} "
@@ -87,11 +91,21 @@ def _confluence_list(bias, crt, plp, aligned, target, model1,
 
     if target:
         items.append({
-            "id": "target", "label": f"Target: {target.type.value.replace('_',' ')}",
+            "id": "target", "level_id": target.id,
+            "label": f"Target: {target.type.value.replace('_',' ')}",
             "short": "target",
             "detail": f"{target.mid:.5f}, on the {zone} side of 50%",
             "tf": target.timeframe.value, "price": target.mid,
             "ts": target.created_ts, "kind": "target",
+            # A target is a Level like any other. Without these it drew as an
+            # arrow at its midpoint even when it was an order block, which is
+            # the same category error the aligned rows were fixed for.
+            "shape": target.meta.get(
+                "shape", "zone" if target.top != target.bottom else "level"),
+            "top": target.top, "bottom": target.bottom,
+            "why": target.meta.get("why", ""),
+            "rule": target.meta.get("rule", ""),
+            "strength": target.meta.get("strength", "strong"),
         })
 
     if model1:
@@ -122,6 +136,37 @@ def _age_label(seconds: int) -> str:
     if seconds < 86400:
         return f"{seconds // 3600}h {(seconds % 3600) // 60}m old"
     return f"{seconds // 86400}d old"
+
+
+#: Bars sent per timeframe. The floor is what you want on screen to read a
+#: chart; the ceiling is what keeps the payload sane.
+WINDOW_MIN = 300
+WINDOW_MAX = 1400
+
+
+def _window(bars: List[Bar], oldest_ts: Optional[int]) -> List[Bar]:
+    """The slice of `bars` to ship, stretched to reach `oldest_ts`.
+
+    A flat `bars[-300:]` on every timeframe looked harmless and was not. Levels
+    are detected over the whole history, so on 15m roughly half of them carried
+    timestamps that had already fallen off the front of the window. Clicking one
+    then ran `findIndex(b => b.t >= ts)`, got bar 0, and the focus bar read out
+    that bar's OHLC as though it were the order block's origin candle — a
+    confident, specific, wrong answer, which is worse than no answer.
+
+    So: ship enough bars to contain every level this timeframe will show.
+    """
+    if not bars:
+        return bars
+    n = WINDOW_MIN
+    if oldest_ts is not None:
+        for i in range(len(bars) - 1, -1, -1):
+            if bars[i].ts <= oldest_ts:
+                n = max(n, len(bars) - i + 10)   # +10 for context before it
+                break
+        else:
+            n = len(bars)       # older than every bar we hold — ship them all
+    return bars[-min(n, WINDOW_MAX):]
 
 
 def _level_json(l: Level) -> dict:
@@ -270,6 +315,14 @@ def run(bars_m5: List[Bar], anchor_hour_utc: int = 21,
         smt=smt,
     )
 
+    # The oldest level each timeframe has to be able to show, so the candle
+    # window below can be stretched to reach it. See _window().
+    oldest_level: dict = {}
+    for _l in pool.valid():
+        _cur = oldest_level.get(_l.timeframe)
+        if _cur is None or _l.created_ts < _cur:
+            oldest_level[_l.timeframe] = _l.created_ts
+
     # --- staleness. An hour-old chart on a 5m strategy is worse than none,
     # and some free sources (Dukascopy) are structurally delayed because they
     # publish one file per completed hour.
@@ -329,7 +382,7 @@ def run(bars_m5: List[Bar], anchor_hour_utc: int = 21,
         "candles": {
             tf.value: [
                 {"t": b.ts, "o": b.open, "h": b.high, "l": b.low, "c": b.close}
-                for b in tfs[tf][-300:]
+                for b in _window(tfs[tf], oldest_level.get(tf))
             ]
             for tf in (Timeframe.M5, Timeframe.M15, Timeframe.H1,
                        Timeframe.H4, Timeframe.D1)

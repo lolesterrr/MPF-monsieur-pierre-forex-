@@ -197,7 +197,7 @@ button.ghost.sm { font-size: 12px; padding: 2px 8px; }
 }
 .toggles input { accent-color: var(--crown-deep); }
 .toggles .strict { color: var(--ink); font-weight: 700; }
-.conf .weak {
+.conf .weak, .ob .weak {
   font-family: var(--f-pixel); font-size: 10.5px; margin-left: 5px;
   padding: 1px 5px; border: 1px solid var(--wattle); color: var(--wattle);
 }
@@ -255,8 +255,28 @@ button.ghost.sm { font-size: 12px; padding: 2px 8px; }
   border: 2px solid var(--ink); background: var(--panel); color: var(--ink); cursor: pointer;
 }
 .ob button:hover { background: var(--ink); color: var(--panel); }
+
+/* The row body is itself a button now — you cannot disagree with an order
+   block you have only seen as two numbers. It has to look like text, not
+   like the keep/drop controls sitting next to it. */
+.ob button.look {
+  border: 0; background: none; padding: 2px 0; text-align: left;
+  width: 100%; display: block; font: inherit; color: inherit;
+}
+.ob button.look:hover { background: none; color: inherit; }
+.ob button.look:hover .zone { text-decoration: underline; }
+.ob button.look:hover .go, .ob button.look.active .go { opacity: 1; }
+.ob button.look .go {
+  /* Visible at rest, not hover-only: a row nobody knows is clickable is a
+     row nobody clicks, and going to the chart is the point of the panel. */
+  opacity: .5; transition: opacity .15s; color: var(--crown-deep); margin-left: 6px;
+}
+.ob button.look.active .zone { font-weight: 700; }
+.ob:has(button.look.active) { background: rgb(243 179 36 / 0.16); }
+
 .ob.yes { background: rgb(243 179 36 / 0.1); }
 .ob.no { opacity: 0.42; }
+.ob.no button.look { text-decoration: line-through; }
 .ob[data-v="yes"] button.y, .ob[data-v="no"] button.n { background: var(--ink); color: var(--panel); }
 
 /* ---------- pierre ---------- */
@@ -439,6 +459,31 @@ footer {
 <script>
 const $ = s => document.querySelector(s);
 const fmt = n => n == null ? "—" : Number(n).toFixed(5);
+// Anything going into an HTML attribute. The old inline .replace(/"/g,...)
+// left < and & alone, so a level's "why" string could break the markup.
+const attr = s => String(s == null ? "" : s)
+  .replace(/&/g, "&amp;").replace(/"/g, "&quot;")
+  .replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/* Your keep/drop calls on order blocks, remembered between sessions. The
+   detector casts wide on purpose; this is where your judgement overrides it,
+   so it has to reach the chart and the score, not just tint a row. */
+const VERDICTS = (() => {
+  try { return JSON.parse(localStorage.getItem("ob-verdicts") || "{}"); }
+  catch (_) { return {}; }
+})();
+function saveVerdicts() {
+  try { localStorage.setItem("ob-verdicts", JSON.stringify(VERDICTS)); }
+  catch (_) {}
+}
+const dropped = () => Object.fromEntries(
+  Object.entries(VERDICTS).filter(([, v]) => v === "no"));
+
+/* One selected row at a time, across both lists. */
+function markActive(btn) {
+  document.querySelectorAll("#conf button, #obs button.look")
+    .forEach(x => x.classList.toggle("active", x === btn));
+}
 const cls = d => d === "bullish" ? "bull" : d === "bearish" ? "bear" : "none";
 const arrow = d => d === "bullish" ? "▲" : d === "bearish" ? "▼" : "·";
 
@@ -527,20 +572,29 @@ function render(d) {
 
 
   /* the things you can actually go and verify */
-  const items = (d.confluences || []).filter(
-    c => !(STRICT && c.strength === "weak"));
-  const hidden = (d.confluences || []).length - items.length;
+  const gone = dropped();
+  Chart.setDropped(gone);
+  const all = d.confluences || [];
+  const items = all.filter(
+    c => !(STRICT && c.strength === "weak") && !gone[c.level_id]);
+  // Counted apart, because "3 hidden" meaning two different things at once
+  // tells you nothing about which switch to reach for.
+  const weakHidden = all.filter(c => STRICT && c.strength === "weak").length;
+  const youDropped = all.filter(
+    c => gone[c.level_id] && !(STRICT && c.strength === "weak")).length;
   // Declared above this line — assigning it earlier threw a temporal dead
   // zone error that silently killed the whole render.
-  $("#strictnote").textContent = !STRICT ? ""
-    : hidden ? `strict: ${hidden} weak hidden`
-             : "strict: nothing weak to hide";
+  $("#strictnote").textContent = [
+    STRICT ? (weakHidden ? `strict: ${weakHidden} weak hidden`
+                         : "strict: nothing weak to hide") : "",
+    youDropped ? `${youDropped} dropped by you` : "",
+  ].filter(Boolean).join(" · ");
   $("#conf").innerHTML = items.length
     ? items.map(c => `<li class="${c.kind}">
-        <button data-tf="${c.tf}" data-ts="${c.ts}" data-price="${c.price}" data-short="${(c.short || c.label || "").replace(/"/g, "")}"
+        <button data-tf="${c.tf}" data-ts="${c.ts}" data-price="${c.price}"
+          data-short="${attr(c.short || c.label)}"
           ${c.top != null ? `data-top="${c.top}" data-bottom="${c.bottom}"` : ""}
-          data-why="${(c.why || "").replace(/"/g, "&quot;")}"
-          data-rule="${(c.rule || "").replace(/"/g, "&quot;")}">
+          data-why="${attr(c.why)}" data-rule="${attr(c.rule)}">
           <span class="tf">${c.tf}</span>${c.strength === "weak"
             ? `<span class="weak" title="displacement did not break structure">weak</span>` : ""}
           <span><span class="lbl">${c.label}</span><br>
@@ -554,8 +608,7 @@ function render(d) {
     const b = e.target.closest("button");
     if (!b) return;
 
-    [...$("#conf").querySelectorAll("button")].forEach(
-      x => x.classList.toggle("active", x === b));
+    markActive(b);
 
     const zone = (b.dataset.top && b.dataset.bottom)
       ? { top: Number(b.dataset.top), bottom: Number(b.dataset.bottom) }
@@ -565,6 +618,7 @@ function render(d) {
                            zone);
     syncTabs();
     showFocus(b, hit);
+    Pierre.point();
     document.querySelector(".chartwrap").scrollIntoView(
       { behavior: "smooth", block: "center" });
   };
@@ -629,32 +683,64 @@ function render(d) {
       per your doc. The common teaching puts it beyond C2 — RULEBOOK §10.5.</p>`;
   } else { $("#m1kv").innerHTML = `<p class="empty">No trigger — the PLP has to be taken first.</p>`; }
 
-  /* order blocks */
-  const obs = d.levels.filter(l => l.type === "order_block");
-  $("#obchip").textContent = obs.length + " to judge";
-  const saved = JSON.parse(localStorage.getItem("ob-verdicts") || "{}");
+  /* order blocks — the queue you judge by eye. Every row goes to the chart,
+     because "I disagree with this one" is impossible to say about a pair of
+     prices you have not seen in context. */
+  const obs = d.levels.filter(l => l.type === "order_block"
+                                && !(STRICT && (l.meta || {}).strength === "weak"));
+  const kept = obs.filter(l => VERDICTS[l.id] !== "no").length;
+  $("#obchip").textContent = kept === obs.length
+    ? obs.length + " to judge"
+    : `${kept} of ${obs.length} kept`;
+
   $("#obs").innerHTML = obs.slice(0, 40).map(l => {
-    const v = saved[l.id] || "";
+    const v = VERDICTS[l.id] || "";
+    const weak = (l.meta || {}).strength === "weak";
     return `<div class="ob ${v}" data-id="${l.id}" data-v="${v}">
-      <div><div class="zone">${fmt(l.bottom)} – ${fmt(l.top)}</div>
-        <div class="tf">${l.tf} · ${l.direction} · ${l.meta.displacement_ratio || "?"}× ATR</div></div>
+      <button class="look" data-tf="${l.tf}" data-ts="${l.ts}"
+        data-price="${(l.top + l.bottom) / 2}" data-top="${l.top}" data-bottom="${l.bottom}"
+        data-short="${l.tf} OB" data-why="${attr(l.why)}" data-rule="${attr(l.rule)}">
+        <div class="zone">${fmt(l.bottom)} – ${fmt(l.top)}${weak
+          ? ` <span class="weak" title="displacement did not break structure">weak</span>` : ""}</div>
+        <div class="tf">${l.tf} · ${l.direction} · ${l.meta.displacement_ratio || "?"}× ATR
+          <span class="go">look &rarr;</span></div>
+      </button>
       <div class="btns"><button class="y">keep</button><button class="n">drop</button></div>
     </div>`;
   }).join("") || `<p class="empty" style="padding:12px">No candidates.</p>`;
 
   $("#obs").onclick = e => {
+    const look = e.target.closest("button.look");
+    if (look) {
+      markActive(look);
+      const hit = Chart.goTo(look.dataset.tf, Number(look.dataset.ts),
+                             Number(look.dataset.price), look.dataset.short,
+                             { top: Number(look.dataset.top),
+                               bottom: Number(look.dataset.bottom) });
+      syncTabs();
+      showFocus(look, hit);
+      Pierre.point();
+      document.querySelector(".chartwrap").scrollIntoView(
+        { behavior: "smooth", block: "center" });
+      return;
+    }
+
     const btn = e.target.closest("button"); if (!btn) return;
     const row = btn.closest(".ob"), id = row.dataset.id;
     const v = btn.classList.contains("y") ? "yes" : "no";
     const next = row.dataset.v === v ? "" : v;
     row.dataset.v = next; row.className = "ob " + next;
-    const s = JSON.parse(localStorage.getItem("ob-verdicts") || "{}");
-    next ? s[id] = next : delete s[id];
-    try { localStorage.setItem("ob-verdicts", JSON.stringify(s)); } catch (_) {}
+    next ? VERDICTS[id] = next : delete VERDICTS[id];
+    saveVerdicts();
+    // A verdict that only tinted a row was a note to yourself. Now dropping
+    // one pulls it off the chart and out of the confluence list, which is
+    // the point: the count should reflect what you actually believe.
+    if (window.__data) render(window.__data);
   };
 
   Chart.render(d);
   buildTabs(d);
+  Pierre.report(d);
 }
 
 const TF_ORDER = ["5m", "15m", "1h", "4h", "1d"];
@@ -711,12 +797,16 @@ function buildTabs(d) {
     try { localStorage.setItem("mpf-toggles", JSON.stringify(s)); } catch (_) {}
   };
   $("#toggles").onchange = e => { if (e.target.dataset.type) persist(); };
-  $("#allon").onclick = () => {
-    $("#toggles").querySelectorAll("input").forEach(i => i.checked = true); persist();
+  // [data-type], not "input" — the bare selector also grabbed the strict
+  // checkbox, so "all"/"none" silently ticked it without applying it or
+  // saving it, and the box then disagreed with what the chart was doing.
+  const setAll = on => {
+    $("#toggles").querySelectorAll("input[data-type]")
+      .forEach(i => i.checked = on);
+    persist();
   };
-  $("#alloff").onclick = () => {
-    $("#toggles").querySelectorAll("input").forEach(i => i.checked = false); persist();
-  };
+  $("#allon").onclick = () => setAll(true);
+  $("#alloff").onclick = () => setAll(false);
 }
 
 function syncTabs() {
@@ -757,6 +847,22 @@ function renderBacktest(d) {
    this says what that bar actually is, so there is no counting involved. */
 function showFocus(btn, hit) {
   const box = $("#focus");
+  // Honest about a level it cannot show, rather than pointing at whatever
+  // candle happened to be at the edge of the window.
+  if (hit && hit.offWindow) {
+    const span = t => new Date(t * 1000).toISOString().slice(0, 16).replace("T", " ");
+    box.hidden = false;
+    box.innerHTML =
+      `<span class="fk">${attr(btn.dataset.short || "level")}</span>` +
+      `<span class="fv">formed outside the loaded ${hit.tf} window ` +
+      `<span class="n">(${span(hit.first)} – ${span(hit.last)}Z)</span></span>` +
+      `<span class="fw">Load more history, or judge it on a higher timeframe.</span>` +
+      `<button class="ghost sm" id="unfocus">clear</button>`;
+    $("#unfocus").onclick = () => {
+      Chart.clearFocus(); box.hidden = true; markActive(null); Pierre.release();
+    };
+    return;
+  }
   if (!hit || !hit.bar) { box.hidden = true; return; }
   const b = hit.bar;
   const when = new Date(b.t * 1000);
@@ -791,8 +897,8 @@ function showFocus(btn, hit) {
   $("#unfocus").onclick = () => {
     Chart.clearFocus();
     box.hidden = true;
-    [...$("#conf").querySelectorAll("button")].forEach(
-      x => x.classList.remove("active"));
+    markActive(null);
+    Pierre.release();
   };
 }
 
@@ -815,30 +921,77 @@ function wireCrosshair(d) {
   });
 }
 
-/* ---------- Monsieur Pierre ---------- */
-(function pierre() {
+/* ---------- Monsieur Pierre ----------------------------------------------
+ *
+ * He is not decoration any more. He has one job: stand next to the thing you
+ * are supposed to be looking at, and be visibly unimpressed when the screen
+ * is not worth looking at.
+ *
+ *   point()     you clicked a row — he walks to that candle on the chart and
+ *               sits by it. A third cue for "which one", after the marker and
+ *               the column, and the only one you can follow with the corner
+ *               of your eye while reading the focus bar.
+ *   report(d)   the payload landed — he takes a mood from it: asleep when the
+ *               market is shut or the feed is stale, put out when there is no
+ *               bias, pleased when the stack lines up.
+ *   release()   back to following the cursor.
+ *
+ * The sheet is a standard oneko layout: 8 poses across, each pose a two-frame
+ * animation. The old code guessed at it and had him cycling THROUGH the sleep
+ * frame mid-run, which is why he flickered.
+ */
+const Pierre = (() => {
   const el = $("#pierre"), sp = $("#speech");
-  // 8 cols x 4 rows of 32px. Row 0 col 0 = sitting; row 0 col 2 = napping.
-  const SIT = [0, 0], NAP = [2, 0], RUN = [[1, 1], [2, 1], [3, 1], [4, 1]];
-  let x = window.innerWidth - 90, y = window.innerHeight - 90;
-  let tx = x, ty = y, frame = 0, idle = 0, moving = false;
+  if (!el) return { point() {}, release() {}, report() {} };
 
-  const put = ([col, row]) => {
-    el.style.backgroundPosition = `${-col * 32}px ${-row * 32}px`;
+  const F = {
+    still: [3, 3], tired: [3, 2], alert: [7, 3],
+    sleep: [[2, 0], [2, 1]],
+    scratch: [[5, 0], [6, 1], [7, 2]],
+    N: [[1, 2], [1, 3]], NE: [[0, 2], [0, 3]],
+    E: [[3, 0], [3, 1]], SE: [[5, 1], [5, 2]],
+    S: [[6, 3], [7, 2]], SW: [[5, 3], [6, 1]],
+    W: [[4, 2], [4, 3]], NW: [[1, 0], [1, 1]],
   };
+  const COMPASS = ["E", "SE", "S", "SW", "W", "NW", "N", "NE"];
+  // atan2 with +y pointing DOWN the screen, so index 2 is south.
+  const dirOf = (dx, dy) =>
+    COMPASS[((Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) % 8) + 8) % 8];
+
+  let x = innerWidth - 90, y = innerHeight - 90;
+  let tx = x, ty = y, tick = 0, idle = 0, moving = false;
+  let mode = "idle";          // idle | point | asleep
+  let mood = null;            // {pose, line} from the last payload
+  let lastSig = "", bubbleUntil = 0, lost = 0;
+
+  const put = ([col, row]) =>
+    el.style.backgroundPosition = `${-col * 32}px ${-row * 32}px`;
+  const anim = (set, speed) => put(set[Math.floor(tick / (speed || 3)) % set.length]);
+
   el.hidden = false;
   el.style.left = x + "px"; el.style.top = y + "px";
-  put(SIT);
+  put(F.still);
+
+  function say(line, ms) {
+    if (!line) return;
+    sp.textContent = line;
+    sp.style.left = Math.min(innerWidth - 200, Math.max(6, x - 60)) + "px";
+    sp.style.top = Math.max(4, y - 26) + "px";
+    sp.classList.add("on");
+    bubbleUntil = Date.now() + (ms || 3400);
+  }
 
   const QUIPS = [
     "the weights mean nothing yet",
-    "wick is not a close",
+    "a wick is not a close",
     "out-of-sample or it didn't happen",
     "those order blocks need your eyes",
-    "a count is not an edge"
+    "a count is not an edge",
+    "one level wearing four hats is still one level",
   ];
 
   document.addEventListener("mousemove", e => {
+    if (mode !== "idle") return;
     if (Math.hypot(e.clientX - x, e.clientY - y) < 160) {
       tx = e.clientX - 16 + (x < e.clientX ? -42 : 42);
       ty = e.clientY - 16;
@@ -846,27 +999,88 @@ function wireCrosshair(d) {
     }
   });
 
+  /* Read the mood off the payload. Order matters: the reasons to distrust
+     the screen come before the reasons to like it. */
+  function report(d) {
+    const m = d.meta || {};
+    const resolved = (d.bias || {}).resolved;
+    if (m.market && m.market.open === false) {
+      mood = { pose: "sleep", line: "forex is shut. this is a photograph." };
+    } else if (m.stale) {
+      mood = { pose: "sleep", line: `data is ${m.age_label || "old"}. fix the feed.` };
+    } else if (!resolved || resolved === "neutral") {
+      mood = { pose: "tired", line: "no bias. your doc says no trades." };
+    } else if ((d.report || {}).score >= 10) {
+      mood = { pose: "alert", line: "stack agrees. now go and look at it." };
+    } else {
+      mood = null;
+    }
+    // render() also runs on every keep/drop click. Without this he announced
+    // the same verdict at you each time, which got old in about four clicks.
+    const sig = mood ? mood.pose + mood.line : "none";
+    const fresh = sig !== lastSig;
+    lastSig = sig;
+
+    if (mode === "point") return;          // busy pointing; don't drag him off
+    if (mood && mood.pose === "sleep") { mode = "asleep"; tx = x; ty = y; }
+    else if (mode === "asleep") { mode = "idle"; }
+    if (mood && fresh) say(mood.line, 4200);
+  }
+
+  /* Walk to the focused candle and stay with it while the chart moves. */
+  function point() { mode = "point"; idle = 0; lost = 0; }
+  function release() { if (mode === "point") mode = "idle"; }
+
   setInterval(() => {
+    tick++;
+    if (sp.classList.contains("on") && Date.now() > bubbleUntil) {
+      sp.classList.remove("on");
+    }
+
+    if (mode === "point") {
+      const p = Chart.focusPoint && Chart.focusPoint();
+      if (p) { tx = p.x - 34; ty = p.y - 16; lost = 0; }
+      // One null used to cancel pointing for good — and the click that sends
+      // him also starts a smooth scroll, so the very first look at the chart
+      // was always off-screen and he never set off at all. Only give up once
+      // the target has been gone for a couple of seconds.
+      else if (++lost > 24) { mode = "idle"; lost = 0; }
+    }
+
     const dx = tx - x, dy = ty - y, dist = Math.hypot(dx, dy);
-    if (dist > 6) {
-      x += dx / dist * 3.2; y += dy / dist * 3.2;
+
+    if (mode !== "asleep" && dist > 6) {
+      // Scaled to distance. At a flat 3.6px per tick, crossing the page to a
+      // focused candle took twenty seconds and looked broken; a cat covering
+      // that ground sprints and then slows as it arrives.
+      const step = Math.min(dist, 3.2 + dist * 0.07);
+      x += dx / dist * step; y += dy / dist * step;
       el.style.left = Math.max(0, Math.min(innerWidth - 32, x)) + "px";
       el.style.top = Math.max(0, Math.min(innerHeight - 32, y)) + "px";
-      frame = (frame + 1) % RUN.length; put(RUN[frame]);
-      moving = true; idle = 0; sp.classList.remove("on");
-    } else {
-      if (moving) { put(SIT); moving = false; }
-      idle++;
-      if (idle === 26) {
-        sp.textContent = QUIPS[Math.floor(Math.random() * QUIPS.length)];
-        sp.style.left = Math.min(innerWidth - 200, x - 60) + "px";
-        sp.style.top = (y - 26) + "px";
-        sp.classList.add("on");
-        setTimeout(() => sp.classList.remove("on"), 3200);
-      }
-      if (idle > 70) put(NAP);
+      anim(F[dirOf(dx, dy)]);
+      moving = true; idle = 0;
+      return;
     }
+
+    if (moving) { moving = false; idle = 0; }
+    idle++;
+
+    if (mode === "asleep") { anim(F.sleep, 8); return; }
+    if (mode === "point") {
+      // Arrived. Sit up and face the candle he walked to.
+      put(F.alert);
+      return;
+    }
+
+    if (mood && idle < 40) { put(F[mood.pose] || F.still); return; }
+    if (idle === 30) say(QUIPS[Math.floor(Math.random() * QUIPS.length)]);
+    if (idle > 150) { anim(F.sleep, 8); return; }
+    if (idle > 110) { put(F.tired); return; }
+    if (idle % 90 > 84) { anim(F.scratch, 2); return; }
+    put(F.still);
   }, 90);
+
+  return { point, release, report, say };
 })();
 
 /* ---------- boot ---------- */
