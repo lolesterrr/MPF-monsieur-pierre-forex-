@@ -52,6 +52,16 @@ button.ghost {
   color: var(--ink); border: 2px solid var(--ink); padding: 5px 11px; cursor: pointer;
 }
 button.ghost:hover { background: var(--ink); color: var(--panel); }
+button.ghost[disabled] { opacity: .5; cursor: progress; }
+.picker { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.picker select {
+  font-family: var(--f-pixel); font-size: 13px; padding: 5px 8px;
+  background: var(--panel); color: var(--ink);
+  border: 2px solid var(--ink); cursor: pointer;
+}
+.picker select:focus-visible, button.ghost:focus-visible {
+  outline: 3px solid var(--crown-deep); outline-offset: 2px;
+}
 
 /* ---------- warning strip ---------- */
 .strip {
@@ -199,7 +209,12 @@ footer {
     <p class="sub">EURUSD · top-down · <span id="stamp">—</span></p>
   </div>
   <div class="spacer"></div>
-  <button class="ghost" id="theme">theme</button>
+  <div class="picker">
+    <select id="symbol" aria-label="instrument"><option>EURUSD</option></select>
+    <select id="tf" aria-label="timeframe"><option>5m</option></select>
+    <button class="ghost" id="go">load</button>
+    <button class="ghost" id="theme">theme</button>
+  </div>
 </header>
 
 <div class="strip" id="strip" hidden>
@@ -323,13 +338,17 @@ const WEIGHTS = { weekly_bias:2, daily_bias:2, h1_profile:1, correct_side_eq:1,
 function render(d) {
   window.__data = d;
   const when = new Date(d.meta.to * 1000);
-  $("#stamp").textContent = when.toISOString().slice(0, 16).replace("T", " ") + "Z";
+  $("#stamp").textContent =
+    (d.meta.symbol || "EURUSD") + " · " + (d.meta.provider || "?") + " · "
+    + when.toISOString().slice(0, 16).replace("T", " ") + "Z";
   $("#pricechip").textContent = fmt(d.meta.price);
 
+  $("#strip").hidden = true;
   if (d.meta.synthetic) {
-    $("#strip").hidden = false;
-    $("#stripmsg").textContent =
-      "Synthetic bars. This is a random walk, not EURUSD — every confluence below is noise by construction.";
+    fail("Synthetic bars — a random walk, not real prices. "
+       + "Every confluence below is noise by construction.");
+  } else if (d.meta.note) {
+    fail(d.meta.note);
   }
 
   /* bias stack */
@@ -525,12 +544,58 @@ function fail(msg) {
 try { Chart.mount($("#chart")); }
 catch (e) { fail("Chart library didn't load — check vendor/ and reload. (" + e.message + ")"); }
 
-fetch("data.json")
-  .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-  .then(d => { render(d); wireCrosshair(d); })
-  .catch(err => fail(
-    "No data.json. Run:  python3 -m src.pipeline --synthetic --bars 12000 --out web/data.json"
-    + "  (" + err.message + ")"));
+let loading = false;
+function load(params) {
+  if (loading) return;
+  loading = true;
+  $("#go").disabled = true;
+  $("#go").textContent = "…";
+
+  // With the server running, /api/analyze is live. Opened as a plain file
+  // it falls back to the JSON the CLI wrote.
+  const url = SERVED ? ("/api/analyze?" + new URLSearchParams(params)) : "data.json";
+
+  fetch(url)
+    .then(async r => {
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error((j && j.error) || ("HTTP " + r.status));
+      return j;
+    })
+    .then(d => { render(d); wireCrosshair(d); })
+    .catch(err => fail(err.message))
+    .finally(() => { loading = false; $("#go").disabled = false; $("#go").textContent = "load"; });
+}
+
+const SERVED = location.protocol.startsWith("http");
+
+function boot() {
+  if (!SERVED) {
+    fail("Opened as a file — showing the last CLI run. "
+       + "Run  python3 -m src.server  for live instruments.");
+    return load({});
+  }
+
+  fetch("/api/catalogue")
+    .then(r => r.json())
+    .then(cat => {
+      const sym = $("#symbol"), tf = $("#tf");
+      sym.innerHTML = Object.entries(cat.instruments)
+        .map(([s, ps]) =>
+          `<option value="${s}"${s === "EURUSD" ? " selected" : ""}>${s} · ${ps[0]}</option>`)
+        .join("");
+      tf.innerHTML = cat.timeframes
+        .map(t => `<option${t === "5m" ? " selected" : ""}>${t}</option>`).join("");
+
+      const go = () => load({ symbol: sym.value, tf: tf.value });
+      $("#go").onclick = go;
+      sym.onchange = go;
+      tf.onchange = go;
+      go();
+    })
+    .catch(err => { fail("Server unreachable: " + err.message); load({}); });
+}
+
+boot();
 
 /* autoSize handles resize — the chart owns its own layout now. */
 </script>

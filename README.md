@@ -32,18 +32,71 @@ assets/               Monsieur Pierre
 tests/                hand-built bars with known answers
 ```
 
-## Running it
+## Data
+
+No single vendor covers forex, futures and metals cheaply, so `src/data/providers.py`
+puts several behind one interface and the registry picks per instrument. Swapping
+vendor later is one class, not a rewrite.
 
 ```bash
-# fake bars, just to see the dashboard work
-python3 -m src.pipeline --synthetic --bars 12000 --out web/data.json
-
-# real 5m bars: time,open,high,low,close[,volume]
-python3 -m src.pipeline --csv data/eurusd_5m.csv --out web/data.json
-
-# then
-python3 -m http.server 8000      # open http://localhost:8000/web/
+export OANDA_TOKEN=...        # free practice account, forex + metals
+export TWELVEDATA_KEY=...     # optional second source
+python3 -m src.server         # http://localhost:8000
 ```
+
+| Provider | Covers | Key | Notes |
+|---|---|---|---|
+| **OANDA v20** | 10 FX pairs, XAU/XAG, index CFDs | free practice account | Best free real feed. 5000 candles/request. Index CFDs are **not** the CME contracts |
+| **Twelve Data** | FX, XAU/XAG | free tier | Small allowance; check current limits |
+| **Yahoo** | FX, **NQ/ES/YM/RTY**, GC, SI, CL, DXY | none | Only free source with real futures. See the warning below |
+
+Credentials come from environment variables. Nothing is committed.
+
+### On the futures problem
+
+Real CME data (NQ, ES) is licensed and priced accordingly — Databento starts at
+$199/mo for historical only, with live on a much higher annual tier; Polygon's
+real-time tier is $199/mo and its cheaper tiers are 15-minute delayed. There is
+no free legitimate live CME feed.
+
+Yahoo's `=F` tickers are the free workaround, with three catches worth knowing
+before you trust a backtest built on them:
+
+1. It is an **undocumented endpoint**, not a supported API. It can change or
+   start refusing requests without notice.
+2. Intraday history is shallow — roughly 60 days at 5m, less at 1m.
+3. **Continuous contracts splice contract months together.** The splice creates
+   price jumps that are not market moves, and the FVG and order block detectors
+   will happily find levels inside a roll gap. Those levels are artifacts.
+
+Fine for personal research. Not something to build a product on.
+
+For forex and gold — which is most of the strategy doc — OANDA's practice
+account is a real feed with no catch, and that is the recommended path.
+
+## Running it
+
+**Web (the normal way).** Instrument and timeframe pickers, live fetch:
+
+```bash
+python3 -m src.server            # http://localhost:8000
+```
+
+Endpoints: `/api/catalogue`, `/api/analyze?symbol=&tf=`, `/api/health`.
+Add `?synthetic=1` to see it work with no keys at all.
+
+The server binds to localhost and holds your API keys in memory. It is a local
+tool. Putting it on a host needs auth, HTTPS and rate limiting first, none of
+which are here.
+
+**CLI (one-off, writes a static JSON).**
+
+```bash
+python3 -m src.pipeline --synthetic --bars 12000 --out web/data.json
+python3 -m src.pipeline --csv data/eurusd_5m.csv --out web/data.json
+```
+
+The dashboard falls back to that file when opened without the server.
 
 `--anchor-hour-utc` sets the daily open (17:00 NY = 21 during EDT, 22 during EST).
 If your feed already gives daily bars, use those instead of resampling.
