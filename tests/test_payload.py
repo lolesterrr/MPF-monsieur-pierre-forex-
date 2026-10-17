@@ -106,5 +106,69 @@ targets = [c for c in payload["confluences"] if c["kind"] == "target"]
 check("target rows carry edges, so a region does not draw as an arrow",
       all("top" in c and "bottom" in c for c in targets), True)
 
+print("\ncache headers: the page and the chart layer must never disagree")
+
+# `max-age=3600` on everything-but-HTML shipped a browser the new index.html
+# and an hour-old chart.js. Both files were individually correct; together
+# they threw on the first call to a function the old one had not exported
+# yet, and the dashboard came up blank. Anything the app's own code lives in
+# has to revalidate.
+from src.wsgi import _cache_control, app                             # noqa: E402
+
+check("index.html revalidates", _cache_control("/index.html", "text/html"),
+      "no-cache")
+check("chart.js revalidates — the one that broke",
+      _cache_control("/chart.js", "text/javascript"), "no-cache")
+check("so does anything else we write",
+      _cache_control("/app.css", "text/css"), "no-cache")
+check("pinned vendor code may be held",
+      "immutable" in _cache_control("/vendor/lightweight-charts.js",
+                                    "text/javascript"), True)
+check("so may Pierre's sprite sheet",
+      "immutable" in _cache_control("/assets/sheet-pierre.png", "image/png"),
+      True)
+
+
+def fetch(path, headers=None):
+    """One request through the real WSGI callable."""
+    env = {"PATH_INFO": path, "QUERY_STRING": "", "REQUEST_METHOD": "GET",
+           "REMOTE_ADDR": "127.0.0.1"}
+    env.update(headers or {})
+    out = {}
+
+    def start(status, hdrs):
+        out["status"] = int(status.split()[0])
+        out["headers"] = {k.lower(): v for k, v in hdrs}
+
+    body = b"".join(app(env, start))
+    return out["status"], out["headers"], body
+
+
+status, headers, body = fetch("/chart.js")
+check("chart.js serves", status, 200)
+check("...with an ETag", "etag" in headers, True)
+check("...and the page's markup can rely on what it exports",
+      b"setDropped" in body, True)
+
+etag = headers["etag"]
+s2, _, b2 = fetch("/chart.js", {"HTTP_IF_NONE_MATCH": etag})
+check("a matching ETag revalidates cheaply", (s2, b2), (304, b""))
+
+s3, _, _ = fetch("/chart.js", {"HTTP_IF_NONE_MATCH": '"stale0000000000"'})
+check("a stale ETag re-sends the file", s3, 200)
+
+# The actual invariant: whatever the page calls on Chart, Chart must export.
+import re                                                            # noqa: E402
+
+page = (Path(__file__).resolve().parents[1] / "web" / "index.html").read_text()
+chart = (Path(__file__).resolve().parents[1] / "web" / "chart.js").read_text()
+called = set(re.findall(r"\bChart\.(\w+)\s*\(", page))
+exported = set(re.findall(r"\bChart\.(\w+)\s*\(", chart))
+tail = chart[chart.rindex("return {"):]
+for name in re.findall(r"[\w]+", tail):
+    exported.add(name)
+missing = sorted(called - exported)
+check("every Chart.* the page calls is exported by chart.js", missing, [])
+
 print(f"\n{PASS} passed, {FAIL} failed\n")
 sys.exit(1 if FAIL else 0)

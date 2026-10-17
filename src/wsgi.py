@@ -21,6 +21,7 @@ There is deliberately no way to run this publicly without a token.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import mimetypes
@@ -206,6 +207,29 @@ def _static(path: str) -> Tuple[int, bytes, str]:
     return 200, target.read_bytes(), ctype
 
 
+#: Files that are pinned or content-stable and can be cached hard: the vendored
+#: chart library (a fixed version) and Monsieur Pierre's sprite sheets.
+_IMMUTABLE = ("/vendor/", "/assets/")
+
+
+def _cache_control(path: str, ctype: str) -> str:
+    """How long the browser may hold a static file.
+
+    This used to be `max-age=3600` for everything that was not HTML, which
+    broke the page every time the chart layer changed. index.html revalidated
+    and chart.js did not, so for up to an hour a browser would run new markup
+    against an old Chart object and throw on the first call to a function that
+    did not exist yet -- a blank dashboard, with the cause invisible because
+    both files were individually correct.
+
+    The app's own code revalidates. With an ETag that costs a 304, not a
+    download. Only genuinely fixed assets get a long life.
+    """
+    if any(seg in path for seg in _IMMUTABLE):
+        return "public, max-age=31536000, immutable"
+    return "no-cache"
+
+
 # ----------------------------------------------------------------- app
 
 def app(environ: dict, start_response: Callable) -> Iterable[bytes]:
@@ -215,8 +239,9 @@ def app(environ: dict, start_response: Callable) -> Iterable[bytes]:
 
     def send(status: int, body: bytes, ctype: str,
              extra: List[Tuple[str, str]] | None = None):
-        reason = {200: "OK", 401: "Unauthorized", 404: "Not Found",
-                  500: "Internal Server Error", 502: "Bad Gateway"}.get(status, "OK")
+        reason = {200: "OK", 304: "Not Modified", 401: "Unauthorized",
+                  404: "Not Found", 500: "Internal Server Error",
+                  502: "Bad Gateway"}.get(status, "OK")
         headers = [("Content-Type", ctype), ("Content-Length", str(len(body)))]
         headers += extra or []
         # The dashboard is the only client; nothing here is embeddable.
@@ -231,8 +256,15 @@ def app(environ: dict, start_response: Callable) -> Iterable[bytes]:
 
     if not path.startswith("/api/"):
         status, body, ctype = _static(path)
-        cache = "no-cache" if ctype == "text/html" else "public, max-age=3600"
-        return send(status, body, ctype, [("Cache-Control", cache)])
+        extra = [("Cache-Control", _cache_control(path, ctype))]
+        if status == 200:
+            etag = '"%s"' % hashlib.sha256(body).hexdigest()[:16]
+            extra.append(("ETag", etag))
+            # Revalidation is the point of no-cache: a byte-for-byte match
+            # costs one 304 and no body.
+            if environ.get("HTTP_IF_NONE_MATCH") == etag:
+                return send(304, b"", ctype, extra)
+        return send(status, body, ctype, extra)
 
     ok, why = _authorised(environ, q)
     if not ok:
