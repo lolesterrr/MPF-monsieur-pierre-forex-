@@ -40,8 +40,13 @@ class Provider(ABC):
     #: our Timeframe -> this vendor's granularity string
     granularity: Dict[str, str] = {}
 
+    #: most vendors cap one response; paging walks backwards in chunks
+    max_per_request: int = 5000
+    supports_paging: bool = False
+
     @abstractmethod
-    def fetch(self, symbol: str, tf: str, count: int) -> List[Bar]:
+    def fetch(self, symbol: str, tf: str, count: int,
+              before_ts: Optional[int] = None) -> List[Bar]:
         ...
 
     def supports(self, symbol: str, tf: str) -> bool:
@@ -93,6 +98,8 @@ class Oanda(Provider):
     Max 5000 candles per request — `count` above that is capped, not paged.
     """
     name = "oanda"
+    max_per_request = 5000
+    supports_paging = True
     HOSTS = {
         "practice": "https://api-fxpractice.oanda.com",
         "live": "https://api-fxtrade.oanda.com",
@@ -117,17 +124,22 @@ class Oanda(Provider):
         "1h": "H1", "4h": "H4", "1d": "D", "1w": "W",
     }
 
-    def fetch(self, symbol: str, tf: str, count: int = 5000) -> List[Bar]:
+    def fetch(self, symbol: str, tf: str, count: int = 5000,
+              before_ts: Optional[int] = None) -> List[Bar]:
         token = self._env("OANDA_TOKEN",
                           "Create a free practice account and generate a token.")
         host = self.HOSTS[os.environ.get("OANDA_ENV", "practice")]
         inst = self.symbols[symbol]
 
-        q = urllib.parse.urlencode({
+        params = {
             "granularity": self.granularity[tf],
             "count": min(count, 5000),
             "price": "M",          # midpoint
-        })
+        }
+        # Paging: ask for the `count` candles ending just before this time.
+        if before_ts:
+            params["to"] = str(before_ts)
+        q = urllib.parse.urlencode(params)
         data = self._get_json(
             f"{host}/v3/instruments/{inst}/candles?{q}",
             headers={"Authorization": f"Bearer {token}",
@@ -169,7 +181,8 @@ class TwelveData(Provider):
         "1h": "1h", "4h": "4h", "1d": "1day", "1w": "1week",
     }
 
-    def fetch(self, symbol: str, tf: str, count: int = 5000) -> List[Bar]:
+    def fetch(self, symbol: str, tf: str, count: int = 5000,
+              before_ts: Optional[int] = None) -> List[Bar]:
         key = self._env("TWELVEDATA_KEY", "Sign up at twelvedata.com for a free key.")
         q = urllib.parse.urlencode({
             "symbol": self.symbols[symbol],
@@ -230,7 +243,9 @@ class Yahoo(Provider):
     RANGE = {"1m": "7d", "5m": "60d", "15m": "60d", "30m": "60d",
              "60m": "730d", "1d": "max", "1wk": "max"}
 
-    def fetch(self, symbol: str, tf: str, count: int = 5000) -> List[Bar]:
+    def fetch(self, symbol: str, tf: str, count: int = 5000,
+              before_ts: Optional[int] = None) -> List[Bar]:
+        # Yahoo's range parameter has no cursor, so paging is not available.
         sym = urllib.parse.quote(self.symbols[symbol])
         g = self.granularity[tf]
         q = urllib.parse.urlencode({"interval": g, "range": self.RANGE[g]})
@@ -278,6 +293,43 @@ def catalogue() -> Dict[str, List[str]]:
         for s in p.symbols:
             out.setdefault(s, []).append(p.name)
     return dict(sorted(out.items()))
+
+
+def get_history(symbol: str, tf: str = "5m", pages: int = 6,
+                provider: Optional[str] = None) -> List[Bar]:
+    """Walk backwards through several requests for a longer history.
+
+    One OANDA request caps at 5000 candles — at 5m that is about 17 days,
+    which is nowhere near enough to produce 30+ out-of-sample trades. Six
+    pages gets roughly four months.
+
+    Stops early when a page returns nothing new, so a provider that ignores
+    the cursor degrades to a single page rather than looping forever.
+    """
+    symbol = symbol.upper()
+    chain = [BY_NAME[provider]] if provider else \
+        [p for p in PROVIDERS if p.supports(symbol, tf)]
+    pager = next((p for p in chain if p.supports_paging), None)
+
+    if pager is None:
+        # No pager available — one page is all there is.
+        return get_bars(symbol, tf, provider=provider)
+
+    out: List[Bar] = []
+    cursor: Optional[int] = None
+    seen: set = set()
+
+    for _ in range(max(1, pages)):
+        batch = pager.fetch(symbol, tf, pager.max_per_request, before_ts=cursor)
+        fresh = [b for b in batch if b.ts not in seen]
+        if not fresh:
+            break
+        seen.update(b.ts for b in fresh)
+        out = fresh + out
+        cursor = min(b.ts for b in fresh)
+
+    out.sort(key=lambda b: b.ts)
+    return out
 
 
 def get_bars(symbol: str, tf: str = "5m", count: int = 5000,

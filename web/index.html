@@ -53,6 +53,18 @@ button.ghost {
 }
 button.ghost:hover { background: var(--ink); color: var(--panel); }
 button.ghost[disabled] { opacity: .5; cursor: progress; }
+button.ghost.sm { font-size: 12px; padding: 2px 8px; }
+
+.btgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 1px; background: var(--tone); border: 2px solid var(--ink); margin-bottom: 12px; }
+.btcell { background: var(--panel); padding: 9px 11px; }
+.btcell .k { font-family: var(--f-pixel); font-size: 11.5px; color: var(--ink-soft); display: block; }
+.btcell .v { font-family: var(--f-display); font-size: 21px; line-height: 1.25; font-variant-numeric: tabular-nums; }
+.btcell .v.pos { color: var(--cool); }
+.btcell .v.neg { color: var(--wattle); }
+.bthead { font-family: var(--f-pixel); font-size: 13px; margin: 0 0 10px; }
+.btnotes { list-style: none; margin: 0 0 10px; padding: 0; }
+.btnotes li { border-left: 3px solid var(--wattle); padding: 5px 0 5px 10px; margin-bottom: 6px; font-size: 13.5px; }
+.btcav { font-size: 12.5px; color: var(--ink-soft); font-style: italic; margin: 0; }
 .picker { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .picker select {
   font-family: var(--f-pixel); font-size: 13px; padding: 5px 8px;
@@ -199,6 +211,26 @@ footer {
   .panel, .panel[style] { grid-column: 1 / -1 !important; }
   #chart { height: 320px; }
 }
+
+@media (max-width: 620px) {
+  /* The titlebar subtitle wraps to two lines and pushes the chip off. It's
+     decoration; the panel name already says what the panel is. */
+  .titlebar .n { display: none; }
+  .titlebar { min-height: 34px; }
+  h1 { font-size: 38px; }
+  .picker { width: 100%; }
+  .picker select { flex: 1 1 auto; min-width: 0; }
+  .score { font-size: 46px; }
+  .rung { grid-template-columns: 52px 1fr auto; padding: 10px; }
+  .kv { grid-template-columns: minmax(84px, auto) 1fr; }
+  .btcell .v { font-size: 18px; }
+}
+
+/* Pierre is a desktop flourish. On a touch screen there is no cursor for him
+   to follow, and his speech bubble lands on top of the panels. */
+@media (hover: none), (max-width: 620px) {
+  #pierre, .speech { display: none !important; }
+}
 </style>
 </head>
 <body class="tone">
@@ -286,6 +318,21 @@ footer {
       <span class="chips"><span class="chip none" id="m1chip">none</span></span>
     </div>
     <div class="body"><dl class="kv" id="m1kv"></dl></div>
+  </section>
+
+  <section class="panel" style="--span:12">
+    <div class="titlebar"><span>backtest.outofsample</span>
+      <span class="n">does any of this survive data it wasn’t tuned on?</span>
+      <span class="chips">
+        <button class="ghost sm" id="runbt">run</button>
+        <span class="chip none" id="btchip">not run</span>
+      </span>
+    </div>
+    <div class="body" id="btbody">
+      <p class="empty">Replays the rules bar by bar over a chronological
+      train/test split, charges spread and slippage, and assumes the stop
+      first when a bar spans both levels. Takes a few seconds.</p>
+    </div>
   </section>
 
   <section class="panel" style="--span:7">
@@ -465,6 +512,35 @@ function render(d) {
   Chart.render(d);
 }
 
+function renderBacktest(d) {
+  const t = d.test, tr = d.train;
+  const chip = $("#btchip");
+  chip.textContent = t.reliable ? "ran" : "too few trades";
+  chip.className = "chip " + (!t.reliable ? "none"
+    : t.expectancy_r > 0 ? "bull" : "bear");
+
+  const cell = (k, v, tone) =>
+    `<div class="btcell"><span class="k">${k}</span>
+     <span class="v ${tone || ""}">${v}</span></div>`;
+  const sign = n => (n > 0 ? "pos" : n < 0 ? "neg" : "");
+
+  $("#btbody").innerHTML =
+    `<p class="bthead">${d.headline}</p>` +
+    `<div class="btgrid">` +
+      cell("out-of-sample", t.n + " trades") +
+      cell("expectancy", (t.expectancy_r > 0 ? "+" : "") + t.expectancy_r + "R", sign(t.expectancy_r)) +
+      cell("win rate", Math.round(t.win_rate * 100) + "%") +
+      cell("total", (t.total_r > 0 ? "+" : "") + t.total_r + "R", sign(t.total_r)) +
+      cell("max drawdown", t.max_drawdown_r + "R", "neg") +
+      cell("in-sample", tr.n + " @ " + tr.expectancy_r + "R") +
+    `</div>` +
+    (d.notes.length
+      ? `<ul class="btnotes">` + d.notes.map(n => `<li>${n}</li>`).join("") + `</ul>`
+      : "") +
+    `<p class="btcav">${d.caveat} Costs charged: ${d.fills.spread_pips} pip spread
+     + ${d.fills.slippage_pips} slippage, both ways. ${d.bars || "?"} bars.</p>`;
+}
+
 function kv(pairs) {
   return pairs.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
 }
@@ -641,6 +717,23 @@ function boot() {
     });
 
   $("#key").onclick = () => { if (askForKey("Set the API key for this instance.")) boot(); };
+
+  $("#runbt").onclick = () => {
+    const btn = $("#runbt");
+    btn.disabled = true; btn.textContent = "…";
+    $("#btchip").textContent = "running";
+    const d = window.__data || {};
+    const p = new URLSearchParams(d.meta && d.meta.synthetic
+      ? { synthetic: "1" }
+      : { symbol: $("#symbol").value, tf: $("#tf").value });
+    api("/api/backtest?" + p)
+      .then(renderBacktest)
+      .catch(e => {
+        $("#btchip").textContent = "failed";
+        $("#btbody").innerHTML = `<p class="empty">${e.message}</p>`;
+      })
+      .finally(() => { btn.disabled = false; btn.textContent = "run"; });
+  };
 }
 
 boot();

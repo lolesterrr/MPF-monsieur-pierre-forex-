@@ -195,8 +195,45 @@ Undecided. Two candidates, both from TradingView:
 
 The Python layer here is chart-agnostic, so this can be decided late.
 
+## Backtest
+
+```bash
+curl 'localhost:8000/api/backtest?symbol=EURUSD&pages=8'
+# or press "run" in the dashboard's backtest panel
+```
+
+Replays the rules bar by bar. Three things make it honest rather than flattering:
+
+- **Costs are charged.** Spread and slippage, both ways. A 27-pip stop with 1.2
+  pips of cost is ~4% of the risk.
+- **Ambiguous bars assume the stop.** When one bar's range spans both the stop
+  and the target, OHLC cannot say which came first, so the worse one is assumed.
+  Without this rule every range strategy backtests beautifully.
+- **The train/test split is chronological and not optional.** `evaluate()` will
+  not report a tuned-on number as if it were out-of-sample.
+
+It also names the three ways a backtest lies: too few trades, a train/test
+collapse, and a result carried by two or three outliers.
+
+**Sanity check:** on synthetic data — a random walk — it reports about −0.03R
+per trade. That is what a random walk should give after costs. A backtester
+that found an edge in noise would be broken.
+
+## Alerts and journal
+
+```bash
+python3 -m src.alerts --watch 300        # Telegram or stdout
+python3 -m src.journal log --symbol EURUSD --direction long \
+    --entry 1.0845 --stop 1.0820 --score 11
+python3 -m src.journal stats
+```
+
+The backtest says what the rules did. The journal says what you did. The gap
+between them is execution, and it is usually where the money goes.
+
 ## Status
 
-v1 in progress — detect and draw.
-v2 — replay over history, count how often each confluence combination preceded the
-documented targets. Out-of-sample only.
+- **v1 — detect and draw.** Done.
+- **v2 — out-of-sample replay.** Done, waiting on real data.
+- **Next:** a token (see `docs/SETUP.md`), then run the backtest on real EURUSD
+  and find out whether any of this holds up.

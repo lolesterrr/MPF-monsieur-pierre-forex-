@@ -31,8 +31,10 @@ import urllib.parse
 from pathlib import Path
 from typing import Callable, Iterable, List, Tuple
 
+from .backtest.engine import Fills
+from .backtest.replay import evaluate
 from .data.feed import synthetic
-from .data.providers import ProviderError, catalogue, get_bars
+from .data.providers import ProviderError, catalogue, get_bars, get_history
 from .pipeline import run
 
 WEB = Path(__file__).resolve().parents[1] / "web"
@@ -144,6 +146,31 @@ def _api(path: str, q: dict) -> Tuple[int, dict]:
         )
         _cache[key] = (time.time(), payload)
         return 200, payload
+
+    if path == "/api/backtest":
+        symbol = (q.get("symbol") or "EURUSD").upper()
+        tf = q.get("tf") or "5m"
+        count = min(int(q.get("count") or 5000), 5000)
+        min_score = int(q.get("min_score") or 0)
+
+        # A backtest needs months, not the 17 days one 5m request returns,
+        # so this pages backwards. See providers.get_history.
+        pages = min(int(q.get("pages") or 6), 12)
+        bars = (synthetic(n=40000) if q.get("synthetic") == "1"
+                else get_history(symbol, tf, pages=pages))
+
+        fills = Fills(
+            spread_pips=float(q.get("spread") or 1.0),
+            slippage_pips=float(q.get("slippage") or 0.2),
+            symbol=symbol,
+        )
+        out = evaluate(bars, anchor_hour_utc=_anchor_hour_utc(),
+                       fills=fills, min_score=min_score)
+        out["symbol"] = "SYNTHETIC" if q.get("synthetic") == "1" else symbol
+        out["synthetic"] = q.get("synthetic") == "1"
+        out["bars"] = len(bars)
+        out["pages"] = pages
+        return 200, out
 
     return 404, {"error": f"no route {path}"}
 

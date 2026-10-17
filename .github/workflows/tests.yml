@@ -21,6 +21,8 @@ jobs:
         run: python3 tests/test_confluence.py
       - name: Backtest tests
         run: python3 tests/test_backtest.py
+      - name: Lifecycle tests
+        run: python3 tests/test_lifecycle.py
       - name: Import check
         run: python3 -c "from app import app; assert callable(app)"
 
