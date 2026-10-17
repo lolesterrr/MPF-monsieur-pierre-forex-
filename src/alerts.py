@@ -148,6 +148,13 @@ def scan(symbols: Optional[List[str]] = None, tf: str = "5m",
         fp = _fingerprint(payload)
         stamp = datetime.now(timezone.utc).strftime("%H:%M")
 
+        # Never alert on stale data. An hour-old setup has already played out,
+        # and a notification implying otherwise is worse than silence.
+        if payload["meta"].get("stale"):
+            print(f"  {stamp} {sym}: data is {payload['meta'].get('age_label')}"
+                  f" — not alerting on stale prices")
+            continue
+
         if score < threshold:
             print(f"  {stamp} {sym}: {score}/{payload['report']['max_score']} — below {threshold}")
             continue

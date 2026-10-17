@@ -37,7 +37,11 @@ from .data.feed import synthetic
 from .data.providers import ProviderError, catalogue, get_bars, get_history
 from .pipeline import run
 
-WEB = Path(__file__).resolve().parents[1] / "web"
+ROOT = Path(__file__).resolve().parents[1]
+WEB = ROOT / "web"
+#: Served alongside web/ because the CSS references ../assets/ for Pierre.
+#: Each entry maps a URL prefix to a directory; both are escape-checked.
+EXTRA_DIRS = {"assets": ROOT / "assets"}
 
 _cache: dict = {}
 CACHE_TTL = 60
@@ -177,10 +181,19 @@ def _api(path: str, q: dict) -> Tuple[int, dict]:
 
 def _static(path: str) -> Tuple[int, bytes, str]:
     rel = "index.html" if path in ("/", "") else path.lstrip("/")
-    target = (WEB / rel).resolve()
 
-    # Path traversal guard. ../../etc/passwd is the oldest trick there is.
-    if not str(target).startswith(str(WEB.resolve())) or not target.is_file():
+    # Pick the base directory from the first path segment.
+    head = rel.split("/", 1)[0]
+    if head in EXTRA_DIRS:
+        base = EXTRA_DIRS[head].resolve()
+        target = (base / rel.split("/", 1)[1]).resolve() if "/" in rel else base
+    else:
+        base = WEB.resolve()
+        target = (base / rel).resolve()
+
+    # Path traversal guard. ../../etc/passwd is the oldest trick there is,
+    # and it has to be checked against whichever base we just chose.
+    if not str(target).startswith(str(base)) or not target.is_file():
         return 404, b"not found", "text/plain"
 
     ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"

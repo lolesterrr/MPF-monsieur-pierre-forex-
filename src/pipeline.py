@@ -37,6 +37,16 @@ def _swing_levels(bars: List[Bar], tf: Timeframe) -> List[Level]:
     return out
 
 
+def _age_label(seconds: int) -> str:
+    if seconds < 120:
+        return "live"
+    if seconds < 3600:
+        return f"{seconds // 60}m old"
+    if seconds < 86400:
+        return f"{seconds // 3600}h {(seconds % 3600) // 60}m old"
+    return f"{seconds // 86400}d old"
+
+
 def _level_json(l: Level) -> dict:
     return {
         "id": l.id, "type": l.type.value, "direction": l.direction.value,
@@ -169,6 +179,12 @@ def run(bars_m5: List[Bar], anchor_hour_utc: int = 21,
         smt=smt,
     )
 
+    # --- staleness. An hour-old chart on a 5m strategy is worse than none,
+    # and some free sources (Dukascopy) are structurally delayed because they
+    # publish one file per completed hour.
+    import time as _time
+    age_s = max(0, int(_time.time()) - bars_m5[-1].ts)
+
     return {
         "meta": {
             "pair": "EURUSD",
@@ -176,6 +192,9 @@ def run(bars_m5: List[Bar], anchor_hour_utc: int = 21,
             "from": bars_m5[0].ts,
             "to": bars_m5[-1].ts,
             "price": round(price, 5),
+            "age_seconds": age_s,
+            "age_label": _age_label(age_s),
+            "stale": age_s > 900,     # 15 min on a 5m strategy
         },
         "bias": {
             "weekly": {"direction": wb.direction.value, "rule": wb.rule} if wb else None,

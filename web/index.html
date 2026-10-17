@@ -46,6 +46,8 @@ h1 {
   font-size: clamp(32px, 5.2vw, 62px); line-height: 0.95; letter-spacing: -0.01em;
 }
 .sub { font-family: var(--f-pixel); font-size: 14px; color: var(--ink-soft); margin: 0; }
+.sub .fresh { color: var(--cool); }
+.sub .stale { color: var(--wattle); font-weight: 700; }
 .spacer { flex: 1 1 auto; }
 button.ghost {
   font-family: var(--f-pixel); font-size: 13px; background: var(--panel);
@@ -387,15 +389,23 @@ const WEIGHTS = { weekly_bias:2, daily_bias:2, h1_profile:1, correct_side_eq:1,
 function render(d) {
   window.__data = d;
   const when = new Date(d.meta.to * 1000);
-  $("#stamp").textContent =
+  const age = d.meta.age_label || "";
+  $("#stamp").innerHTML =
     (d.meta.symbol || "EURUSD") + " · " + (d.meta.provider || "?") + " · "
-    + when.toISOString().slice(0, 16).replace("T", " ") + "Z";
+    + when.toISOString().slice(0, 16).replace("T", " ") + "Z"
+    + (age ? ` · <span class="${d.meta.stale ? "stale" : "fresh"}">${age}</span>` : "");
   $("#pricechip").textContent = fmt(d.meta.price);
 
   $("#strip").hidden = true;
   if (d.meta.synthetic) {
     fail("Synthetic bars — a random walk, not real prices. "
        + "Every confluence below is noise by construction.");
+  } else if (d.meta.stale) {
+    fail(`Data is ${d.meta.age_label}. ${d.meta.provider === "dukascopy"
+      ? "Dukascopy publishes one file per completed hour, so it is always "
+      + "behind — fine for backtesting, not for reading a live chart."
+      : "The feed may be delayed or the market closed."}`
+      + " Levels below are correct for when the data ends, not for now.");
   } else if (d.meta.note) {
     fail(d.meta.note);
   }

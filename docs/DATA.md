@@ -12,9 +12,39 @@ four of them.
 
 ---
 
+## Live vs historical — read this first
+
+These are different problems and one provider does not solve both.
+
+| Need | Use | Why |
+|---|---|---|
+| **Backtest, history** | Dukascopy | free, deep, no account |
+| **Live chart, alerts** | Twelve Data | free key, real-time forex |
+
+**Dukascopy is NOT live.** It publishes one file per *completed* hour, so the
+current hour cannot exist yet. You are always looking at data at least an hour
+old. For backtesting that is irrelevant. For reading a 5-minute chart it is
+dangerous — the setup you are looking at has already played out.
+
+MPF handles this for you rather than leaving it as a footgun:
+
+- Every analysis carries `age_seconds` and a `stale` flag.
+- The dashboard prints the data's age next to the instrument, in red past 15
+  minutes, with a banner explaining why.
+- **Alerts refuse to fire on stale data.** A notification about an hour-old
+  setup is worse than silence.
+
+The provider ordering already reflects the split: live requests try Twelve Data
+first, `get_history` picks the deepest pager, which is Dukascopy.
+
+If you only ever backtest, Dukascopy alone is genuinely enough. If you want a
+live chart, get the free Twelve Data key as well.
+
+---
+
 ## What to use, in order
 
-### 1. Dukascopy — no account at all · **start here**
+### 1. Dukascopy — no account at all · **for history**
 
 A public static file server. No signup, no key, no country check, and the
 deepest free history of anything here — years of tick data.
@@ -35,11 +65,13 @@ loudly if neither does — so a wrong-scale failure becomes an error instead of 
 backtest built on garbage. `--verify` prints an hour of real quotes so you can
 confirm with your own eyes.
 
-**Trade-off:** one HTTP request per hour of history, so 30 days is ~720
-requests and takes a while. Free and deep, not fast. It is ordered last for the
-live dashboard and first for `get_history`.
+**Trade-offs:**
 
-### 2. Twelve Data — free key, forex only
+- One HTTP request per hour of history, so 30 days is ~720 requests and takes a
+  while. Free and deep, not fast.
+- **Delayed by at least an hour** — see the section above. History only.
+
+### 2. Twelve Data — free key, forex only · **for live**
 
 Signup is open worldwide. Free tier is **8 requests/minute, 800/day**, which is
 plenty for one person clicking a dashboard.
