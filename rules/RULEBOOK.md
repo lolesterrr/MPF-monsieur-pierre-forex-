@@ -310,16 +310,47 @@ best *before-the-fact* proxy, and it is the right shape: a resting pool of stops
 testing it, and every teacher's version differs. That is exactly why §12's out-of-sample
 step is not optional.
 
-## 11. Open — your doc flags these itself
+## 11. The gaps your doc flags — now filled with defaults
 
-1. **What invalidates a bias mid-week / mid-day?** Currently a bias persists until the
-   next weekly/daily close. Likely wrong.
-2. **When do you stop taking new CRTs before the target is hit?** Currently unlimited.
-   Needs a cap or a condition.
-3. **"Last up-close candle that took out a high"** — how far back may the search go
-   before we call it no-setup? Currently 20 bars `[D]`.
-4. **Order block acceptance** — the UI must let you accept/reject; those choices should
-   be stored and later used to measure how well the auto-filter matches your eye.
+Implemented in `src/core/lifecycle.py`. Every number here is `[D]`; these are the
+most likely to be wrong because your doc gave no guidance at all.
+
+### 11.1 Bias invalidation
+
+**A close beyond the opposite reference level kills the bias.** Reference levels
+are the ones the bias was read from — the previous week's high/low for a weekly
+bias, the previous day's for a daily one.
+
+A wick beyond does **not** invalidate, because a wick is exactly what the
+strategy expects (§3.1 rule 3 sets a bearish bias *from* a wick above). What says
+the read was wrong is price going on to close above it anyway.
+
+Alternatives, if you disagree: close beyond by N pips; two consecutive closes;
+or invalidate only when the opposite bias fires.
+
+### 11.2 When to stop taking CRTs toward one target
+
+Three independent stops, whichever comes first:
+
+| Stop | Default `[D]` |
+|---|---|
+| Target reached (wick counts) | — |
+| Attempts at one target | 3 |
+| Consecutive losses toward one target | 2 |
+
+Your doc says "keep taking third-candle CRTs until the target is reached" with no
+cap. Unlimited is almost certainly not what you meant: after two losers toward
+the same target the read is wrong, not unlucky.
+
+### 11.3 Model #1 search depth
+
+20 bars `[D]`. Beyond that it is a no-setup rather than a stale candle.
+
+### 11.4 Order block acceptance
+
+The dashboard queue stores your keep/drop calls per browser. `src/backtest`
+can later measure how well the 1.5× ATR filter matches your eye — that is the
+point of collecting them.
 
 ---
 

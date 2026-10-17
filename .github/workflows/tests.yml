@@ -1,0 +1,34 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # No dependencies to install — that is the point.
+      - name: Detector tests
+        run: python3 tests/test_detectors.py
+      - name: Confluence tests
+        run: python3 tests/test_confluence.py
+      - name: Backtest tests
+        run: python3 tests/test_backtest.py
+      - name: Import check
+        run: python3 -c "from app import app; assert callable(app)"
+
+      # A key committed by accident is the failure mode that actually hurts.
+      - name: Secret sweep
+        run: |
+          if git grep -nIE '(OANDA_TOKEN|TWELVEDATA_KEY|MPF_TOKEN)[[:space:]]*=[[:space:]]*["'"'"'][A-Za-z0-9_-]{16,}' -- . ':!.env.example'; then
+            echo "::error::Possible committed credential"
+            exit 1
+          fi
+          echo "clean"

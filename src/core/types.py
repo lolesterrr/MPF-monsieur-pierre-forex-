@@ -10,6 +10,26 @@ from enum import Enum
 from typing import Optional
 
 
+PIP = 0.0001  # EURUSD and most majors — the default
+
+#: Pip size per instrument. Getting this wrong silently corrupts every risk
+#: number: gold moves in 0.01, so a 4.5-point stop read as EURUSD pips comes
+#: out as 45000 instead of 450.
+PIP_SIZES = {
+    "XAUUSD": 0.01, "GOLD": 0.01,
+    "XAGUSD": 0.001, "SILVER": 0.001,
+    "USDJPY": 0.01, "EURJPY": 0.01, "GBPJPY": 0.01,   # JPY quotes to 2dp
+    "NAS100": 1.0, "SPX500": 1.0, "US30": 1.0,
+    "NQ": 0.25, "ES": 0.25, "YM": 1.0, "RTY": 0.1,     # CME tick sizes
+    "OIL": 0.01, "DXY": 0.001, "USDX": 0.001,
+}
+
+
+def pip_size(symbol: str | None) -> float:
+    """Pip size for an instrument, defaulting to the major-pair 0.0001."""
+    return PIP_SIZES.get((symbol or "").upper(), PIP)
+
+
 class Direction(Enum):
     BULLISH = "bullish"
     BEARISH = "bearish"
@@ -116,15 +136,17 @@ class Level:
     def contains(self, price: float) -> bool:
         return self.bottom <= price <= self.top
 
-    def distance_pips(self, price: float) -> float:
-        """Distance from price to the nearest edge of the zone, in pips."""
+    def distance_pips(self, price: float, pip: float = PIP) -> float:
+        """Distance from price to the nearest edge of the zone, in pips.
+
+        `pip` defaults to the major-pair size. Pass pip_size(symbol) when the
+        instrument is known — detectors run one instrument at a time, so the
+        default is right for EURUSD and wrong for gold.
+        """
         if self.contains(price):
             return 0.0
         gap = self.bottom - price if price < self.bottom else price - self.top
-        return gap / PIP
-
-
-PIP = 0.0001  # EURUSD
+        return gap / pip
 
 
 @dataclass

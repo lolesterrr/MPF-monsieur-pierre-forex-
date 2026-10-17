@@ -1,0 +1,9 @@
+[project]
+name = "mpf"
+version = "0.1.0"
+description = "Monsieur Pierre's Forex — multi-timeframe confluence tooling"
+requires-python = ">=3.11"
+dependencies = []          # stdlib only, deliberately
+
+[tool.vercel]
+entrypoint = "app:app"

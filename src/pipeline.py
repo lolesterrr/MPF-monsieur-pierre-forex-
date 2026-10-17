@@ -11,7 +11,7 @@ import json
 from typing import List, Optional
 
 from .core.bias import daily_bias, h1_profile, premium_discount, weekly_bias
-from .core.confluence import LevelPool, build_report, mark_plp
+from .core.confluence import LevelPool, build_report, check_smt, mark_plp
 from .core.sessions import build_asian_ranges, classify_break
 from .core.types import Bar, Direction, Level, LevelType, Timeframe
 from .data.feed import TF_SECONDS, load_csv, resample, synthetic
@@ -48,8 +48,15 @@ def _level_json(l: Level) -> dict:
     }
 
 
-def run(bars_m5: List[Bar], anchor_hour_utc: int = 21) -> dict:
-    """Full top-down pass. Returns the dashboard payload."""
+def run(bars_m5: List[Bar], anchor_hour_utc: int = 21,
+        comparison: Optional[dict] = None) -> dict:
+    """Full top-down pass. Returns the dashboard payload.
+
+    `comparison` carries the SMT reference series (Rulebook §8), shaped
+    {"symbol": "GBPUSD", "bars": [...], "inverted": False}. DXY passes
+    inverted=True because it moves against EURUSD. Omit it and the SMT check
+    simply reports as unmet rather than silently passing.
+    """
     tfs = {
         Timeframe.M5: bars_m5,
         Timeframe.M15: resample(bars_m5, Timeframe.M15),
@@ -128,6 +135,27 @@ def run(bars_m5: List[Bar], anchor_hour_utc: int = 21) -> dict:
         if after is not None:
             brk = classify_break(bars_m5, asia, after)
 
+    # ---- SMT (Rulebook §8) — needs a second symbol
+    smt = None
+    if comparison and comparison.get("bars") and plp is not None:
+        try:
+            plp_tf2 = crt.timeframe.plp_tier or Timeframe.H1
+            ref = resample(comparison["bars"], plp_tf2)
+            base = tfs[plp_tf2]
+            if len(ref) > 10 and len(base) > 10:
+                smt = check_smt(
+                    base, mark_sweeps(base, find_swings(base)),
+                    ref, mark_sweeps(ref, find_swings(ref)),
+                    bias, as_of_index=len(base) - 1,
+                    comp_inverted=bool(comparison.get("inverted")),
+                )
+                if smt:
+                    smt["symbol"] = comparison.get("symbol", "?")
+        except Exception as e:
+            # A broken comparison feed must not take down the whole analysis.
+            smt = None
+            print(f"  SMT skipped: {type(e).__name__}: {e}")
+
     # ---- report (Rulebook §10)
     report = build_report(
         direction=bias,
@@ -138,7 +166,7 @@ def run(bars_m5: List[Bar], anchor_hour_utc: int = 21) -> dict:
             (zone == "premium" and target.top < eq) or
             (zone == "discount" and target.bottom > eq))),
         target=target, crt=crt, plp=plp, plp_alignment=aligned, model1=model1,
-        smt=None,  # needs a second symbol; see README
+        smt=smt,
     )
 
     return {
@@ -185,6 +213,7 @@ def run(bars_m5: List[Bar], anchor_hour_utc: int = 21) -> dict:
             {"t": b.ts, "o": b.open, "h": b.high, "l": b.low, "c": b.close}
             for b in tfs[Timeframe.H1][-200:]
         ],
+        "smt": smt,
         "report": report.to_dict(),
     }
 

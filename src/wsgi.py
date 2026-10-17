@@ -42,6 +42,14 @@ CACHE_TTL = 60
 
 TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
 
+#: Rulebook §8 — which symbol to read divergence against.
+SMT_DEFAULTS = {
+    "EURUSD": "GBPUSD", "GBPUSD": "EURUSD",
+    "XAUUSD": "XAGUSD", "NQ": "ES", "ES": "NQ",
+}
+#: These move against the base pair, so divergence is the mirror case.
+INVERTED = {"DXY", "USDX"}
+
 
 # ----------------------------------------------------------------- helpers
 
@@ -112,9 +120,24 @@ def _api(path: str, q: dict) -> Tuple[int, dict]:
             return 200, hit[1]
 
         bars = get_bars(symbol, tf, count=count, provider=provider)
-        payload = run(bars, anchor_hour_utc=_anchor_hour_utc())
+
+        # SMT reference (Rulebook §8). A failure here degrades the SMT check
+        # to "unmet" rather than failing the whole analysis.
+        comparison = None
+        ref = (q.get("smt") or SMT_DEFAULTS.get(symbol) or "").upper()
+        if ref and ref != symbol:
+            try:
+                comparison = {"symbol": ref,
+                              "bars": get_bars(ref, tf, count=count),
+                              "inverted": ref in INVERTED}
+            except ProviderError as e:
+                print(f"  SMT reference {ref} unavailable: {e}")
+
+        payload = run(bars, anchor_hour_utc=_anchor_hour_utc(),
+                      comparison=comparison)
         payload["meta"].update(
             symbol=symbol, tf=tf, synthetic=False, provider=provider or "auto",
+            smt_reference=(comparison or {}).get("symbol"),
             note=None if tf in ("1m", "5m", "15m") else
             f"Fetched at {tf}. Weekly and daily bias are resampled from this, "
             f"so the stack may be incomplete.",
