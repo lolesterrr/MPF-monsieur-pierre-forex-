@@ -158,5 +158,36 @@ check("per-condition breakdown warns about multiple comparisons",
       "multiple-comparisons" in ev["by_condition"]["_warning"], True)
 check("costs are recorded in the output", ev["fills"]["spread_pips"], 1.0)
 
+
+print("\nStats explains the headline: avg win, avg loss, planned targets")
+# A 44% win rate that loses money is arithmetic, not mystery, and the headline
+# number hides it. These fields are what let you tell whether to fix the
+# exits, the entries, or neither.
+from src.backtest.engine import Stats, Trade                          # noqa: E402
+
+def _t(entry, stop, t1, t2, r, outcome):
+    tr = Trade(direction=Direction.BULLISH, entry_ts=0, entry=entry,
+               stop=stop, t1=t1, t2=t2)
+    tr.r_multiple, tr.outcome = r, outcome
+    return tr
+
+st = Stats()
+for t in (_t(1.0, 0.99, 1.02, 1.04, 2.0, "t2"),          # 2R win, T1 at 2R, T2 at 4R
+          _t(1.0, 0.99, 1.02, 1.04, -1.0, "stopped"),
+          _t(1.0, 0.99, 1.02, 1.04, -1.0, "stopped"),
+          _t(1.0, 0.99, 1.02, 1.04, 0.5, "timeout")):
+    st.add(t)
+d = st.to_dict()
+check("avg win is the mean of winners", d["avg_win_r"], 1.25)
+check("avg loss is the mean of losers", d["avg_loss_r"], -1.0)
+check("planned T1 is measured in stop distances", d["planned_t1_r"], 2.0)
+check("planned T2 is measured in stop distances", d["planned_t2_r"], 4.0)
+check("expectancy still reconciles with the parts",
+      round(d["win_rate"] * d["avg_win_r"] + (1 - d["win_rate"]) * d["avg_loss_r"], 3),
+      d["expectancy_r"])
+check("an empty Stats does not divide by zero",
+      (Stats().to_dict()["avg_win_r"], Stats().to_dict()["planned_t1_r"]),
+      (None, None))
+
 print(f"\n{PASS} passed, {FAIL} failed\n")
 sys.exit(1 if FAIL else 0)

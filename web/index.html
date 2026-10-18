@@ -203,6 +203,15 @@ button.ghost.sm { font-size: 12px; padding: 2px 8px; }
 }
 /* The one row on the list you can still act on. Everything else is a record
    of something that already happened. */
+/* backtest anatomy */
+.anat { width: 100%; border-collapse: collapse; margin: 12px 0 4px;
+  font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.anat th, .anat td { padding: 5px 8px; text-align: right; border-bottom: 2px solid var(--tone); }
+.anat thead th { font-family: var(--f-pixel); font-weight: 400; color: var(--ink-soft); }
+.anat tbody th { text-align: left; font-family: var(--f-pixel); font-weight: 400; }
+.anat td.oc { text-align: left; color: var(--ink-soft); }
+@media (max-width: 620px) { .anat { display: block; overflow-x: auto; } }
+
 .conf .live {
   font-family: var(--f-pixel); font-size: 10.5px; margin-left: 5px;
   padding: 1px 5px; border: 1px solid var(--crown-deep);
@@ -857,6 +866,28 @@ function syncTabs() {
     b.setAttribute("aria-pressed", String(b.dataset.tf === Chart.tf())));
 }
 
+/* Why the headline number is what it is. A 44% win rate that loses money is
+   not a mystery, it is arithmetic: average win, average loss, and where the
+   targets were planned relative to the stop. Showing only the headline hid
+   the one thing that tells you whether to fix the exits, the entries, or
+   neither. In-sample is shown beside out-of-sample because 16 trades is too
+   few to read anything from alone. */
+function anatomy(tr, te) {
+  const f = (v, suf) => v == null ? "—" : (v > 0 && suf === "R" ? "+" : "") + v + suf;
+  const outcomes = o => Object.keys(o || {}).length
+    ? Object.entries(o).sort((a, b) => b[1] - a[1])
+        .map(([k, n]) => `${k.replace(/_/g, " ")} ${n}`).join(" · ")
+    : "—";
+  const row = (label, x) =>
+    `<tr><th>${label}</th><td>${x.n}</td><td>${f(x.avg_win_r, "R")}</td>
+     <td>${f(x.avg_loss_r, "R")}</td><td>${f(x.planned_t1_r, "R")}</td>
+     <td>${f(x.planned_t2_r, "R")}</td><td class="oc">${outcomes(x.by_outcome)}</td></tr>`;
+  return `<table class="anat"><thead><tr><th></th><th>trades</th>
+    <th>avg win</th><th>avg loss</th><th>T1 planned</th><th>T2 planned</th>
+    <th>how they ended</th></tr></thead><tbody>${row("in-sample", tr)}
+    ${row("out-of-sample", te)}</tbody></table>`;
+}
+
 function renderBacktest(d) {
   const t = d.test, tr = d.train;
   const chip = $("#btchip");
@@ -879,6 +910,7 @@ function renderBacktest(d) {
       cell("max drawdown", t.max_drawdown_r + "R", "neg") +
       cell("in-sample", tr.n + " @ " + tr.expectancy_r + "R") +
     `</div>` +
+    anatomy(tr, t) +
     (d.notes.length
       ? `<ul class="btnotes">` + d.notes.map(n => `<li>${n}</li>`).join("") + `</ul>`
       : "") +

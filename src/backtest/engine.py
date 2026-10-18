@@ -146,11 +146,20 @@ class Stats:
     total_r: float = 0.0
     r_values: List[float] = field(default_factory=list)
     by_outcome: Dict[str, int] = field(default_factory=dict)
+    #: Where the targets sit, in units of the stop distance, BEFORE anything
+    #: happens. A strategy whose first target is 0.4R away has to win ~70% of
+    #: the time just to break even, whatever else is true of it, and that is
+    #: knowable from the setups alone. The headline win rate hides it.
+    t1_r: List[float] = field(default_factory=list)
+    t2_r: List[float] = field(default_factory=list)
 
     def add(self, t: Trade) -> None:
         self.n += 1
         self.total_r += t.r_multiple
         self.r_values.append(t.r_multiple)
+        if t.risk > 0:
+            self.t1_r.append(abs(t.t1 - t.entry) / t.risk)
+            self.t2_r.append(abs(t.t2 - t.entry) / t.risk)
         self.by_outcome[t.outcome] = self.by_outcome.get(t.outcome, 0) + 1
         if t.r_multiple > 0:
             self.wins += 1
@@ -182,10 +191,26 @@ class Stats:
         pains = -sum(r for r in self.r_values if r < 0)
         return (gains / pains) if pains > 0 else None
 
+    @staticmethod
+    def _mean(xs: List[float]) -> Optional[float]:
+        return round(sum(xs) / len(xs), 2) if xs else None
+
+    @property
+    def avg_win_r(self) -> Optional[float]:
+        return self._mean([r for r in self.r_values if r > 0])
+
+    @property
+    def avg_loss_r(self) -> Optional[float]:
+        return self._mean([r for r in self.r_values if r <= 0])
+
     def to_dict(self) -> dict:
         return {
             "n": self.n,
             "win_rate": round(self.win_rate, 3),
+            "avg_win_r": self.avg_win_r,
+            "avg_loss_r": self.avg_loss_r,
+            "planned_t1_r": self._mean(self.t1_r),
+            "planned_t2_r": self._mean(self.t2_r),
             "expectancy_r": round(self.expectancy, 3),
             "total_r": round(self.total_r, 2),
             "max_drawdown_r": round(self.max_drawdown_r, 2),
