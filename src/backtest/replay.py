@@ -94,10 +94,15 @@ def find_setups(
 
         for crt in find_crts(tf_bars, crt_tf):
             # --- bias as it stood when C3 opened (closed bars only)
+            # A CRT whose C3 has not printed is the live one — real and
+            # tradeable, but there is no C3 bar to replay, so a historical
+            # run has nothing to measure. Skipping it is correct here and is
+            # NOT the same as hiding it from the dashboard, which is the
+            # mistake this used to make everywhere.
             c3 = crt.c3_index
             if c3 < 2 or c3 >= len(tf_bars):
                 continue
-            c3_ts = tf_bars[c3].ts
+            c3_ts = crt.c3_ts
 
             wk_i = _last_closed(wk, c3_ts)
             dy_i = _last_closed(dy, c3_ts)

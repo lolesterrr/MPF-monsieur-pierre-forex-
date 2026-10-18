@@ -74,6 +74,17 @@ class Timeframe(Enum):
         """Rulebook 5.3 — the tier one step down for PLP marking."""
         return {Timeframe.D1: Timeframe.H1, Timeframe.H4: Timeframe.M15}.get(self)
 
+    @property
+    def seconds(self) -> int:
+        """Nominal bar length. Nominal because the market shuts at weekends,
+        so the NEXT bar is not always this far ahead — see
+        market_hours.next_open, which is what you want for projecting forward.
+        """
+        return {
+            Timeframe.M5: 300, Timeframe.M15: 900, Timeframe.H1: 3600,
+            Timeframe.H4: 14400, Timeframe.D1: 86400, Timeframe.W1: 604800,
+        }[self]
+
 
 @dataclass(frozen=True)
 class Bar:

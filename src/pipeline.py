@@ -49,13 +49,23 @@ def _confluence_list(bias, crt, plp, aligned, target, model1,
     items = []
 
     if crt:
+        # Point at the candle you can actually go and look at. While C3 is
+        # still pending there is no C3 bar to focus — the thing you verify is
+        # C2's sweep and close-back-inside, which is the whole pattern anyway.
+        live = getattr(crt, "c3_pending", False)
         items.append({
-            "id": "crt", "label": f"CRT on {crt.timeframe.value}",
-            "short": "CRT C3",
+            "id": "crt",
+            "label": f"CRT on {crt.timeframe.value}"
+                     + (" — C3 live" if live else ""),
+            "short": "C2 sweep" if live else "CRT C3",
             "detail": f"{crt.direction.value}, range "
-                      f"{crt.range_low:.5f}–{crt.range_high:.5f}",
-            "tf": crt.timeframe.value, "price": crt.eq, "ts": crt.c3_ts,
+                      f"{crt.range_low:.5f}–{crt.range_high:.5f}"
+                      + (", C3 open now — this is the trade candle" if live
+                         else ", C3 has closed"),
+            "tf": crt.timeframe.value, "price": crt.eq,
+            "ts": (crt.c2_ts or crt.c3_ts) if live else crt.c3_ts,
             "kind": "crt",
+            "pending": live,
         })
 
     if plp:
@@ -358,6 +368,9 @@ def run(bars_m5: List[Bar], anchor_hour_utc: int = 21,
             "range_high": round(crt.range_high, 5), "range_low": round(crt.range_low, 5),
             "eq": round(crt.eq, 5), "opposing": round(crt.opposing, 5),
             "c3_ts": crt.c3_ts,
+            "c2_ts": crt.c2_ts,
+            # True while C3 has not closed: the setup is still ahead of you.
+            "c3_pending": crt.c3_pending,
         } if crt else None,
         "plp": {
             "price": round(plp.price, 5), "tf": plp.timeframe.value,

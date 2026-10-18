@@ -179,6 +179,37 @@ Three consecutive bars:
 
 Direction must match the active bias or the CRT is ignored.
 
+### 5.1.1 When a CRT is reported — C2's close, not C3's
+
+**The pattern is complete the moment C2 closes.** C1 gives the range, C2 sweeps
+it and closes back inside, and both are shut bars by then. C3 is the
+*consequence*, not the evidence — nothing about detection needs it.
+
+This matters because getting it wrong is invisible. The detector originally
+required a C3 bar to *exist in the array* before reporting, and `resample()`
+drops the forming bar, so "exists" meant "already closed". The freshest CRT
+the dashboard could ever show was one whose trade candle was over — a full day
+late on D1. Both halves looked correct on their own.
+
+So C3's timestamp is **projected** from C2 rather than read from a bar, and
+rolled forward past the weekend (`market_hours.next_open`) — Friday's daily
+candle plus 24h is Saturday, but the next daily candle opens Sunday 17:00 NY.
+
+A CRT carries `c3_pending`:
+
+| `c3_pending` | Means | Use |
+|---|---|---|
+| `True` | C2 closed, C3 has not | **The only kind you can still trade.** Verify the sweep on C2. |
+| `False` | C3 is a closed bar | History. For study or backtest, not for taking. |
+
+The backtester skips pending CRTs — there is no C3 bar to replay — which is
+correct, and is *not* the same as hiding them from the dashboard. Note the
+asymmetry this used to create: the backtest scored a strategy acting at C3's
+**open** while the UI could not reveal the setup until C3's **close**. The
+numbers measured something the dashboard was incapable of executing.
+
+C3's OHLC is never consulted either way. No lookahead.
+
 ### 5.2 Derived levels
 
 - `crt_50 = (range_high + range_low) / 2`
@@ -201,8 +232,8 @@ Direction must match the active bias or the CRT is ignored.
 **Working definition `[D]`:** the most recent **unswept confirmed swing** on the
 PLP timeframe, on the side opposite the bias, formed before C3 opens.
 
-- Bearish bias → the nearest unswept **swing high** below... *above* current price
-- Bullish bias → the nearest unswept **swing low** below current price
+- Bearish bias → the nearest unswept **swing high** *above* current price
+- Bullish bias → the nearest unswept **swing low** *below* current price
 
 **PLP taken:** price trades through it (wick is enough).
 

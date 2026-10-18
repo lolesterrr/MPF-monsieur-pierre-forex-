@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.core.market_hours import (                                   # noqa: E402
-    clean, is_open, market_status, same_session, session_id,
+    clean, is_open, market_status, next_open, same_session, session_id,
 )
 from src.core.types import Bar, Timeframe                             # noqa: E402
 from src.detectors.levels import find_fvgs                            # noqa: E402
@@ -87,6 +87,24 @@ closed = market_status(now=ts(2026,10,17,12))
 check("Saturday reports closed", closed["open"], False)
 check("and explains rather than alarms", "not a stale feed" in closed["detail"], True)
 check("Wednesday reports open", market_status(now=ts(2026,10,14,12))["open"], True)
+
+print("\nnext_open: projecting a bar forward has to skip the weekend")
+# Used to say when a CRT's C3 opens. Adding one bar length to Friday's daily
+# candle lands on Saturday, and an alarm set for a shut market is worse than
+# no alarm.
+check("mid-week is already open, so unchanged",
+      next_open(ts(2026, 10, 14, 10)), ts(2026, 10, 14, 10))
+check("Friday 17:00 (the close) rolls to Sunday 17:00",
+      next_open(ts(2026, 10, 16, 17)), ts(2026, 10, 18, 17))
+check("mid-Saturday rolls to Sunday 17:00",
+      next_open(ts(2026, 10, 17, 9)), ts(2026, 10, 18, 17))
+check("Sunday before the open rolls to the open",
+      next_open(ts(2026, 10, 18, 9)), ts(2026, 10, 18, 17))
+check("Sunday after the open is left alone",
+      next_open(ts(2026, 10, 18, 19)), ts(2026, 10, 18, 19))
+check("whatever it returns is always a time the market is open",
+      all(is_open(next_open(ts(2026, 10, 12 + d, h)))
+          for d in range(7) for h in (0, 6, 12, 17, 18, 23)), True)
 
 print(f"\n{PASS} passed, {FAIL} failed\n")
 sys.exit(1 if FAIL else 0)

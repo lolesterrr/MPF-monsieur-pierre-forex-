@@ -201,6 +201,13 @@ button.ghost.sm { font-size: 12px; padding: 2px 8px; }
   font-family: var(--f-pixel); font-size: 10.5px; margin-left: 5px;
   padding: 1px 5px; border: 1px solid var(--wattle); color: var(--wattle);
 }
+/* The one row on the list you can still act on. Everything else is a record
+   of something that already happened. */
+.conf .live {
+  font-family: var(--f-pixel); font-size: 10.5px; margin-left: 5px;
+  padding: 1px 5px; border: 1px solid var(--crown-deep);
+  background: var(--crown-deep); color: var(--panel); font-weight: 700;
+}
 
 .focusbar {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
@@ -507,6 +514,9 @@ function markActive(btn) {
     .forEach(x => x.classList.toggle("active", x === btn));
 }
 const cls = d => d === "bullish" ? "bull" : d === "bearish" ? "bear" : "none";
+const stamp = ts => ts
+  ? new Date(ts * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z"
+  : "—";
 const arrow = d => d === "bullish" ? "▲" : d === "bearish" ? "▼" : "·";
 
 /* ---------- theme ---------- */
@@ -618,7 +628,9 @@ function render(d) {
           ${c.top != null ? `data-top="${c.top}" data-bottom="${c.bottom}"` : ""}
           data-why="${attr(c.why)}" data-rule="${attr(c.rule)}">
           <span class="tf">${c.tf}</span>${c.strength === "weak"
-            ? `<span class="weak" title="displacement did not break structure">weak</span>` : ""}
+            ? `<span class="weak" title="displacement did not break structure">weak</span>` : ""
+          }${c.pending
+            ? `<span class="live" title="C2 has closed and C3 has not — the trade candle is open now">live</span>` : ""}
           <span><span class="lbl">${c.label}</span><br>
                 <span class="det">${c.detail}</span></span>
           <span class="go">look &rarr;</span>
@@ -655,14 +667,23 @@ function render(d) {
 
   /* CRT */
   if (d.crt) {
-    $("#crtchip").textContent = d.crt.tf + " " + d.crt.direction;
+    // "C3 live" is the state you can still trade; anything else is history.
+    const live = !!d.crt.c3_pending;
+    $("#crtchip").textContent = d.crt.tf + " " + d.crt.direction
+      + (live ? " · C3 live" : " · C3 closed");
     $("#crtchip").className = "chip " + cls(d.crt.direction);
     $("#crtkv").innerHTML = kv([
       ["range high", fmt(d.crt.range_high)], ["range low", fmt(d.crt.range_low)],
       ["50% — exit 1", fmt(d.crt.eq) + "  (60%)"],
       ["opposing — exit 2", fmt(d.crt.opposing) + "  (40%)"],
-      ["C3 opened", new Date(d.crt.c3_ts * 1000).toISOString().slice(0, 16).replace("T", " ")]
-    ]);
+      ["C2 swept", stamp(d.crt.c2_ts)],
+      [live ? "C3 opens" : "C3 opened", stamp(d.crt.c3_ts)]
+    ]) + (live
+      ? `<p class="empty" style="margin-top:9px">C2 has closed, so the pattern
+         is confirmed and C3 is the candle you trade. Verify the sweep on C2
+         with your own eyes first.</p>`
+      : `<p class="empty" style="margin-top:9px">C3 has closed. This one is for
+         study, not for taking — the trade window is behind you.</p>`);
   } else { $("#crtkv").innerHTML = `<p class="empty">No CRT in the bias direction.</p>`; }
 
   /* PLP */

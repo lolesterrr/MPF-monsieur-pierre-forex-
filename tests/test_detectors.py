@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.bias import daily_bias, h1_profile, weekly_bias           # noqa: E402
+from src.core.market_hours import is_open                               # noqa: E402
 from src.core.sessions import build_asian_ranges, classify_break        # noqa: E402
 from src.core.types import Bar, Direction, LevelStatus, Timeframe       # noqa: E402
 from src.detectors.crt import find_crts                                 # noqa: E402
@@ -115,6 +116,52 @@ amb = [
     b(2, 1.0020, 1.0030, 1.0000, 1.0010),
 ]
 check("ambiguous CRT ignored", len(find_crts(amb, Timeframe.H4)), 0)
+
+print("\nCRT: reported when C2 closes, not when C3 closes")
+# The bug this guards: the loop ran to len(bars) - 1 and read bars[i + 1].ts,
+# so a C3 bar had to exist before the pattern was reported. resample() drops
+# the forming bar, so "exists" meant "already closed" — the freshest CRT you
+# could ever see was one whose trade candle was over. On a daily, a full day
+# late. Nothing about detection needs C3: C1 and C2 are the whole pattern.
+live = crt_bars[:2]                      # C1 and C2 only — C3 has not opened
+live_crts = find_crts(live, Timeframe.H4)
+check("CRT found from C1 + C2 alone", len(live_crts), 1)
+check("...flagged as still tradeable", live_crts[0].c3_pending, True)
+check("...direction still right", live_crts[0].direction, Direction.BEARISH)
+check("...C2's timestamp carried, so there is a candle to focus",
+      live_crts[0].c2_ts, live[1].ts)
+check("...C3 projected one bar ahead of C2",
+      live_crts[0].c3_ts, live[1].ts + Timeframe.H4.seconds)
+
+check("a CRT whose C3 exists is NOT pending", crts[0].c3_pending, False)
+check("...and takes C3's real timestamp, not a projection",
+      crts[0].c3_ts, crt_bars[2].ts)
+
+# No lookahead, still: C3's OHLC must never change the verdict.
+import copy                                                          # noqa: E402
+altered = copy.deepcopy(crt_bars)
+altered[2] = b(2, 9.0, 9.9, 8.0, 8.5)    # nonsense C3
+check("C3's prices never affect detection",
+      [(c.direction, c.range_high, c.range_low)
+       for c in find_crts(altered, Timeframe.H4)],
+      [(c.direction, c.range_high, c.range_low)
+       for c in find_crts(crt_bars, Timeframe.H4)])
+
+print("\nCRT: a projected C3 skips the weekend")
+# Friday's daily candle plus 24h is Saturday, when nothing opens. A CRT whose
+# C2 is Friday trades on Sunday's candle, and saying "C3 opens Saturday" is
+# an alarm set for a shut market.
+FRI = int(datetime(2026, 1, 8, 22, 0, tzinfo=UTC).timestamp())   # Thu 22:00Z
+def d(i, o, h, l, c):
+    return Bar(ts=FRI + i * 86400, open=o, high=h, low=l, close=c)
+wk = [d(0, 1.0000, 1.0050, 1.0000, 1.0040),
+      d(1, 1.0040, 1.0070, 1.0030, 1.0045)]      # C2 = Friday's candle
+wkc = find_crts(wk, Timeframe.D1)
+check("weekend CRT found", len(wkc), 1)
+check("...C3 does not open on a shut market",
+      is_open(wkc[0].c3_ts), True)
+check("...it opens Sunday, not Saturday",
+      datetime.fromtimestamp(wkc[0].c3_ts, UTC).strftime("%a"), "Sun")
 
 print("\nModel #1")
 m1_bars = [

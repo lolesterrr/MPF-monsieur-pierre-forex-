@@ -189,6 +189,29 @@ def last_close_ts(now: Optional[int] = None) -> int:
     return int(friday.timestamp())
 
 
+def next_open(ts: int) -> int:
+    """The first instant the market is open at or after `ts`.
+
+    Projecting the next bar forward by adding its own length is wrong across a
+    weekend: Friday's daily bar plus 24h lands on Saturday, when the next daily
+    bar actually opens Sunday 17:00 New York. A CRT whose C2 is Friday's candle
+    trades on Sunday's, and telling you "C3 opens Saturday" would be nonsense
+    on a chart you are about to set an alarm by.
+
+    Hour granularity is enough — the market only ever opens on the hour.
+    """
+    if is_open(ts):
+        return ts
+    # At most one weekend to step over, so a bounded walk beats date algebra
+    # and cannot silently return a wrong answer if the rules above change.
+    hour = ts // 3600
+    for step in range(1, 24 * 4):
+        probe = (hour + step) * 3600
+        if is_open(probe):
+            return probe
+    return ts
+
+
 def market_status(now: Optional[int] = None) -> dict:
     """What to show the user instead of an error when nothing is moving."""
     now = now or int(datetime.now(tz=UTC).timestamp())
