@@ -170,5 +170,19 @@ for name in re.findall(r"[\w]+", tail):
 missing = sorted(called - exported)
 check("every Chart.* the page calls is exported by chart.js", missing, [])
 
+
+print("\nthe page says which commit it was served from")
+# Twice in one morning the question was "is that the new version or the old
+# one" and the only way to answer it was to guess.
+import os                                                            # noqa: E402
+os.environ["VERCEL_GIT_COMMIT_SHA"] = "abcdef1234567890"
+_, _, page = fetch("/")
+check("the placeholder is filled in on the served page",
+      b"__BUILD__" not in page and b"build abcdef1" in page, True)
+os.environ.pop("VERCEL_GIT_COMMIT_SHA")
+_, _, local = fetch("/")
+check("and reads 'local' when there is no commit to name",
+      b"build local" in local, True)
+
 print(f"\n{PASS} passed, {FAIL} failed\n")
 sys.exit(1 if FAIL else 0)

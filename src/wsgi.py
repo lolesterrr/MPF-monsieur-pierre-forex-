@@ -208,7 +208,20 @@ def _static(path: str) -> Tuple[int, bytes, str]:
         return 404, b"not found", "text/plain"
 
     ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-    return 200, target.read_bytes(), ctype
+    body = target.read_bytes()
+    if target.name == "index.html":
+        # Stamp the page with the commit that produced it. Twice in one
+        # morning the question was "is that the new version or the old one",
+        # and the only way to answer it was to guess. Vercel sets this
+        # variable at build time; locally it is simply absent.
+        body = body.replace(b"__BUILD__", _build_id().encode())
+    return 200, body, ctype
+
+
+def _build_id() -> str:
+    sha = (os.environ.get("VERCEL_GIT_COMMIT_SHA")
+           or os.environ.get("GIT_COMMIT") or "")
+    return sha[:7] if sha else "local"
 
 
 #: Files that are pinned or content-stable and can be cached hard: the vendored
