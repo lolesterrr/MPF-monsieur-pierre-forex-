@@ -134,35 +134,50 @@ real blocker, and it was never actually OANDA.
 
 ---
 
-## Why the backtest has still never run on real data
+## How history gets fetched, and the 504 that taught us why
 
-Status as of 2026-10-18. The replay engine is fine — 40,000 synthetic bars
-produce 113 trades across a clean train/test split in under a second, and the
-out-of-sample number comes back at −0.035R on a random walk, which is correct
-and means it is not flattering anything. **Every remaining problem is data
-acquisition, not analysis.** Two of them:
+The replay engine was never the problem — 40,000 bars produce 113 trades
+across a clean train/test split in under a second. Every failure was in
+getting data to it. Pressing **run backtest** on a deployed instance returned
+HTTP 504 and nothing else. Three causes, each invisible on its own:
 
-**1. `/api/backtest` picks the deepest pager, which is Dukascopy, which is
-far too slow for a serverless request.** `get_history` chooses by
-`max_per_request`, and Dukascopy advertises 100,000 against Twelve Data's
-5,000 — so it always wins. But Dukascopy issues one HTTP request *per hour of
-history*: six pages of 5m bars is roughly 8,000 requests. No function timeout
-makes that work. `maxDuration` is now 60s, which is enough for Twelve Data and
-nowhere near enough for this.
+**1. The chooser asked the wrong question.** `get_history` picked its pager
+with `max(pagers, key=max_per_request)` — which reads as "go as deep as you
+can" and behaves as "always pick Dukascopy", because Dukascopy advertises
+100,000 bars against everyone else's 5,000. Dukascopy also issues one HTTP
+request *per hour of history*, so a six-page pull was **50,000 requests** from
+a function with 60 seconds to live. The size of a page was never the right
+question; whether the provider can answer inside its budget is.
 
-**2. Twelve Data cannot page at all.** `TwelveData.supports_paging` is False,
-so it is never eligible as a pager. With Dukascopy removed it would fall
-through to a single `get_bars` call: 5,000 bars, about 17 days of 5m, which
-yields a handful of trades and an honest "too few trades" verdict.
+**2. Twelve Data could not page.** `supports_paging` was False, so the one
+provider that could have answered was never eligible. With Dukascopy out it
+would have fallen through to a single 5,000-bar call — 17 days of 5m, a
+handful of trades, an honest "too few trades".
 
-So the endpoint either times out or returns too little. Neither failure is
-visible until you deploy and tap the button.
+**3. An unconfigured provider could still win.** OANDA ties with Twelve Data
+on page size and sorts first, so once the slow pager was excluded the chooser
+picked OANDA and the backtest died on `OANDA_TOKEN is not set` — a missing key
+surfacing as a data failure. `get_bars` had always skipped unconfigured
+providers; this path never did. Only an end-to-end run through the real route
+exposed it.
 
-The fix is to teach Twelve Data to page — its `time_series` endpoint takes
-`end_date`, so the cursor `get_history` already passes can drive it — and to
-prefer a provider that can answer inside the request budget rather than the
-one with the biggest advertised page. Dukascopy stays the right answer for
-deep history pulled **offline** to a CSV, which is the other way to do this:
+**Now:** Twelve Data pages with `end_date` (and pins `timezone=UTC`, so the
+naive timestamps it returns really are UTC rather than accidentally so).
+`pick_pager` considers only providers that are **configured** and, for an
+interactive call, **`live_capable`** — and raises a message naming the slow
+provider and pointing here, rather than hanging. `get_history` also takes a
+`budget_seconds` so a slow page cannot run out the clock.
+
+Six pages of 5m through Twelve Data is about **104 days** — enough for a real
+out-of-sample run. End to end through the WSGI route with the vendor stubbed:
+HTTP 200 in 0.3s, 6 requests.
+
+Free-tier note: 8 requests/minute. Six pages is fine; the route's cap of 12
+could brush the limit.
+
+Dukascopy stays the right answer for deep history pulled **offline**, where
+there is no 60-second ceiling — ask for it by name and `pick_pager` honours
+it:
 
 ```bash
 python3 -m src.data.dukascopy --verify EURUSD     # eyeball the decode first

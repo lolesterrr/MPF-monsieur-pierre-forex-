@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
@@ -173,6 +174,12 @@ class TwelveData(Provider):
     Check your plan's current request allowance — the free limits move.
     """
     name = "twelvedata"
+    #: `time_series` takes end_date, which is all paging backwards needs.
+    #: Without this the only pager left was Dukascopy, and get_history chose
+    #: it for a request-time fetch — one HTTP call per hour of history, so a
+    #: six-page pull meant 50,000 requests and a guaranteed 504.
+    supports_paging = True
+    max_per_request = 5000
     symbols = {
         "EURUSD": "EUR/USD", "GBPUSD": "GBP/USD", "USDJPY": "USD/JPY",
         "AUDUSD": "AUD/USD", "USDCAD": "USD/CAD", "USDCHF": "USD/CHF",
@@ -190,13 +197,24 @@ class TwelveData(Provider):
     def fetch(self, symbol: str, tf: str, count: int = 5000,
               before_ts: Optional[int] = None, deadline: Optional[float] = None) -> List[Bar]:
         key = self._env("TWELVEDATA_KEY", "Sign up at twelvedata.com for a free key.")
-        q = urllib.parse.urlencode({
+        params = {
             "symbol": self.symbols[symbol],
             "interval": self.granularity[tf],
-            "outputsize": min(count, 5000),
+            "outputsize": min(count, self.max_per_request),
             "format": "JSON",
+            # Be explicit rather than lucky. Without this the vendor answers in
+            # the exchange's timezone and the parser below assumes UTC for any
+            # naive string — which is only correct by accident.
+            "timezone": "UTC",
             "apikey": key,
-        })
+        }
+        if before_ts:
+            # end_date is inclusive, so step back one second or every page
+            # would hand back the cursor bar again.
+            params["end_date"] = datetime.fromtimestamp(
+                before_ts - 1, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        q = urllib.parse.urlencode(params)
         data = self._get_json(f"https://api.twelvedata.com/time_series?{q}")
 
         if data.get("status") == "error":
@@ -451,28 +469,78 @@ def catalogue() -> Dict[str, dict]:
     return dict(sorted(out.items()))
 
 
+def pick_pager(symbol: str, tf: str,
+               provider: Optional[str] = None,
+               interactive: bool = True) -> Optional[Provider]:
+    """Which provider should walk backwards through history.
+
+    This used to be `max(pagers, key=max_per_request)`, which reads as "go as
+    deep as you can" and behaves as "always pick Dukascopy", because Dukascopy
+    advertises 100,000 bars against everyone else's 5,000. Dukascopy also
+    issues one HTTP request per HOUR of history, so a six-page pull is 50,000
+    requests. Served from a 60-second function that is not deep history, it is
+    a 504 — which is exactly what it was.
+
+    The size of a page was never the right question. The right question is
+    whether the provider can answer inside the budget it is being called in.
+    So an interactive caller only gets a `live_capable` pager; a deep offline
+    pull asks for the slow one by name.
+    """
+    if provider:
+        # Named explicitly — honour it. The CLI wants Dukascopy on purpose.
+        p = BY_NAME[provider]
+        return p if p.supports_paging else None
+
+    # is_configured matters as much as the rest: OANDA ties with Twelve Data
+    # on page size and sorts first, so without this the chooser picked it and
+    # the whole backtest died on "OANDA_TOKEN is not set" — a missing key
+    # reported as a data failure. get_bars already skips unconfigured
+    # providers; this path did not.
+    pagers = [p for p in PROVIDERS
+              if p.supports(symbol, tf) and p.supports_paging
+              and is_configured(p)]
+    if interactive:
+        pagers = [p for p in pagers if p.live_capable]
+    if not pagers:
+        return None
+    return max(pagers, key=lambda p: p.max_per_request)
+
+
 def get_history(symbol: str, tf: str = "5m", pages: int = 6,
-                provider: Optional[str] = None) -> List[Bar]:
+                provider: Optional[str] = None,
+                interactive: bool = True,
+                budget_seconds: Optional[float] = None) -> List[Bar]:
     """Walk backwards through several requests for a longer history.
 
-    One OANDA request caps at 5000 candles — at 5m that is about 17 days,
-    which is nowhere near enough to produce 30+ out-of-sample trades. Six
-    pages gets roughly four months.
+    One request caps at 5000 candles — at 5m that is about 17 days, nowhere
+    near enough to produce 30+ out-of-sample trades. Six pages gets roughly
+    four months.
 
     Stops early when a page returns nothing new, so a provider that ignores
-    the cursor degrades to a single page rather than looping forever.
+    the cursor degrades to a single page rather than looping forever, and
+    stops early on `budget_seconds` so a slow page cannot run out the clock
+    on the caller.
     """
     symbol = symbol.upper()
-    chain = [BY_NAME[provider]] if provider else \
-        [p for p in PROVIDERS if p.supports(symbol, tf)]
-    # Prefer the deepest pager for history, not just the first one.
-    pagers = [p for p in chain if p.supports_paging]
-    pager = max(pagers, key=lambda p: p.max_per_request) if pagers else None
+    pager = pick_pager(symbol, tf, provider, interactive)
 
     if pager is None:
-        # No pager available — one page is all there is.
+        slow = [p for p in PROVIDERS
+                if p.supports(symbol, tf) and p.supports_paging]
+        if interactive and slow:
+            # Say which door is shut and where the other one is, rather than
+            # quietly returning one page and calling it a backtest.
+            raise ProviderError(
+                f"No fast provider can page {symbol} {tf}. "
+                f"{', '.join(p.name for p in slow)} could, but needs far too "
+                "many requests to finish inside a web request — pull it "
+                "offline instead (see docs/DATA.md). A key for a paging "
+                "provider such as Twelve Data fixes this."
+            )
+        # Nothing pages at all — one page is genuinely all there is.
         return get_bars(symbol, tf, provider=provider)
 
+    started = time.time()
     out: List[Bar] = []
     cursor: Optional[int] = None
     seen: set = set()
@@ -485,6 +553,8 @@ def get_history(symbol: str, tf: str = "5m", pages: int = 6,
         seen.update(b.ts for b in fresh)
         out = fresh + out
         cursor = min(b.ts for b in fresh)
+        if budget_seconds and time.time() - started > budget_seconds:
+            break
 
     out.sort(key=lambda b: b.ts)
     return out

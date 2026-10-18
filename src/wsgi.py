@@ -167,8 +167,12 @@ def _api(path: str, q: dict) -> Tuple[int, dict]:
         # A backtest needs months, not the 17 days one 5m request returns,
         # so this pages backwards. See providers.get_history.
         pages = min(int(q.get("pages") or 6), 12)
+        # interactive=True keeps a provider that cannot finish inside a web
+        # request from being chosen at all, and the budget stops paging with
+        # time left to actually run the replay and answer.
         bars = (synthetic(n=40000) if q.get("synthetic") == "1"
-                else get_history(symbol, tf, pages=pages))
+                else get_history(symbol, tf, pages=pages,
+                                 interactive=True, budget_seconds=35.0))
 
         fills = Fills(
             spread_pips=float(q.get("spread") or 1.0),
