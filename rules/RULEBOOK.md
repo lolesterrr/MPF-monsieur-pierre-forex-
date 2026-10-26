@@ -249,7 +249,7 @@ Tiers:
 
 **PLP taken:** price trades through it (wick is enough), **inside C3**.
 
-If no qualifying swing exists in the last `48` PLP bars `[D]`, no PLP → no setup.
+If no qualifying swing exists in the last `48` PLP bars (author confirmed), no PLP → no setup.
 
 The old working definition (nearest unswept swing) is still available as
 `mark_plp(..., require_mss=False)` for comparison.
@@ -279,7 +279,7 @@ stabbing into a **fresh PD array** instead (it can also line up with a PLP):
   counts as formed once its displacement candle has closed.
 - **Fresh:** nothing traded into it between forming and the mark. Of the
   fresh ones, the nearest to price (the first it would reach).
-- Looked for within the last `48` bars of its own timeframe `[D]`.
+- Looked for within the last `48` bars of its own timeframe (author confirmed).
 - The stab must happen inside C3. Then Model #1 exactly as below, on 15M
   (daily) or 5M (4H).
 
