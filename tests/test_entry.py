@@ -156,5 +156,55 @@ check("every trade clears 2R to T1 at its entry",
       all(rr(s.trade.entry, s.trade.stop, s.trade.t1, s.direction) >= 2
           for s in setups), True)
 
+print("\nPD-array entry, used when there is no PLP")
+from src.core.entry import fresh_pd_array, known_index, stab_index   # noqa: E402
+from src.core.types import Level, LevelType                          # noqa: E402
+
+H4 = 14400
+t0 = int(datetime(2026, 10, 19, 1, tzinfo=NY).timestamp())
+h4 = [Bar(ts=t0 + i * H4, open=1.1050, high=1.1060, low=1.1040, close=1.1050)
+      for i in range(10)]
+fvg = Level(type=LevelType.FVG, direction=Direction.BULLISH, top=1.1030,
+            bottom=1.1020, created_ts=h4[3].ts, created_index=3,
+            timeframe=Timeframe.H4)
+mark = h4[8].ts
+tfb = {Timeframe.H4: h4}
+check("a fresh 4H FVG below price is picked for a daily CRT",
+      fresh_pd_array([fvg], tfb, Timeframe.D1, Direction.BULLISH, mark), fvg)
+check("...but not for a 4H CRT (that wants 1H / 15M)",
+      fresh_pd_array([fvg], tfb, Timeframe.H4, Direction.BULLISH, mark), None)
+
+touched = list(h4)
+touched[5] = Bar(ts=h4[5].ts, open=1.1050, high=1.1055, low=1.1028, close=1.1050)
+check("an array already traded into before the mark is not fresh",
+      fresh_pd_array([fvg], {Timeframe.H4: touched}, Timeframe.D1,
+                     Direction.BULLISH, mark), None)
+check("one that only forms after the mark does not count",
+      fresh_pd_array([fvg], tfb, Timeframe.D1, Direction.BULLISH, h4[3].ts), None)
+
+ob = Level(type=LevelType.ORDER_BLOCK, direction=Direction.BULLISH, top=1.1030,
+           bottom=1.1020, created_ts=h4[2].ts, created_index=2,
+           timeframe=Timeframe.H4, meta={"displacement_index": 4})
+check("an order block is knowable only once its displacement closed",
+      known_index(ob), 4)
+
+m15 = [Bar(ts=mark + i * 900, open=1.1045, high=1.1050, low=1.1040, close=1.1045)
+       for i in range(8)]
+m15[4] = Bar(ts=m15[4].ts, open=1.1040, high=1.1042, low=1.1027, close=1.1035)
+check("the stab is the first bar that trades into it",
+      stab_index(m15, fvg, Direction.BULLISH, mark, mark + 86400), 4)
+check("a stab after C3 closes does not count",
+      stab_index(m15, fvg, Direction.BULLISH, mark, m15[3].ts), None)
+
+
+print("\nthe test period reads the training candles as history")
+from src.backtest.replay import evaluate                             # noqa: E402
+ev = evaluate(bars, fills=Fills(1.0, 0.2, "EURUSD"))
+check("no out-of-sample CRT is lost to warm-up",
+      ev["funnel"]["test"].get("x_warmup", 0), 0)
+check("every out-of-sample trade starts inside the test period",
+      ev["test"]["n"] == sum(ev["entry_via"].values()), True)
+
+
 print(f"\n{PASS} passed, {FAIL} failed\n")
 sys.exit(1 if FAIL else 0)

@@ -24,7 +24,8 @@ from .detectors.levels import (
 from .detectors.model1 import find_model1
 from .core.entry import (
     MIN_RR_T1, STOP_BUFFER_PIPS, arm_time, c3_end, c3_tradeable,
-    entry_timeframe, pd_array_below, rr, sweep_index,
+    entry_timeframe, fresh_pd_array, pd_array_below, rr, stab_index,
+    sweep_index,
 )
 from .detectors.swings import find_swings, mark_sweeps
 
@@ -284,6 +285,9 @@ def run(bars_m5: List[Bar], anchor_hour_utc: int = 21,
         as_of = max(0, sum(1 for b in plp_bars if b.ts < arm_ts) - 1)
 
         plp = mark_plp(plp_bars, plp_sw, bias, as_of, plp_tf)
+        end_ts = c3_end(crt.timeframe, c3_ts)
+        pd = pd_entry = None
+        si = etf = None
         if plp:
             aligned = pool.near(plp.price, tolerance_pips=5.0, exclude_tf=plp_tf)
             if plp.is_taken:
@@ -291,25 +295,37 @@ def run(bars_m5: List[Bar], anchor_hour_utc: int = 21,
                                     pip_size(symbol)) \
                     if crt.timeframe is Timeframe.D1 else None
                 etf = entry_timeframe(crt.timeframe, pd is not None)
-                ebars = tfs[etf]
-                si = sweep_index(ebars, plp.price, bias,
+                si = sweep_index(tfs[etf], plp.price, bias,
                                  max(arm_ts, plp_bars[plp.taken_index].ts))
-                if si is not None:
-                    model1 = find_model1(
-                        ebars, bias, si, etf,
-                        stop_buffer=STOP_BUFFER_PIPS * pip_size(symbol),
-                        until_ts=c3_end(crt.timeframe, c3_ts))
-                if model1:
-                    rr_close = rr(model1.trigger_close, model1.stop, crt.eq, bias)
-                    rr_limit = rr(model1.entry, model1.stop, crt.eq, bias)
-                    m1_plan = {
-                        "rr_close": round(rr_close, 2),
-                        "rr_limit": round(rr_limit, 2),
-                        "mode": ("close" if rr_close >= MIN_RR_T1 else
-                                 "limit" if rr_limit >= MIN_RR_T1 else "skip"),
-                        "tf": etf.value,
-                        "pd_array_below": bool(pd),
-                    }
+        else:
+            # No PLP: a fresh PD array price stabs into during C3 (§7).
+            pd_entry = fresh_pd_array(pool.levels, tfs, crt.timeframe, bias,
+                                      arm_ts)
+            if pd_entry is not None:
+                etf = entry_timeframe(crt.timeframe, False)
+                si = stab_index(tfs[etf], pd_entry, bias, arm_ts, end_ts)
+        if si is not None:
+            model1 = find_model1(
+                tfs[etf], bias, si, etf,
+                stop_buffer=STOP_BUFFER_PIPS * pip_size(symbol),
+                until_ts=end_ts)
+        if model1:
+            rr_close = rr(model1.trigger_close, model1.stop, crt.eq, bias)
+            rr_limit = rr(model1.entry, model1.stop, crt.eq, bias)
+            m1_plan = {
+                "rr_close": round(rr_close, 2),
+                "rr_limit": round(rr_limit, 2),
+                "mode": ("close" if rr_close >= MIN_RR_T1 else
+                         "limit" if rr_limit >= MIN_RR_T1 else "skip"),
+                "tf": etf.value,
+                "pd_array_below": bool(pd),
+                "via": "plp" if plp else "pd_array",
+                "pd_array": ({"tf": pd_entry.timeframe.value,
+                              "type": pd_entry.type.value,
+                              "top": round(pd_entry.top, 5),
+                              "bottom": round(pd_entry.bottom, 5)}
+                             if pd_entry else None),
+            }
 
     # ---- Asian range (Rulebook §9)
     ranges = build_asian_ranges(bars_m5)

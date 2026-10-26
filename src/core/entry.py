@@ -111,3 +111,86 @@ def sweep_index(bars: List[Bar], price: float, bias: Direction,
         if (b.low < price) if bias is Direction.BULLISH else (b.high > price):
             return i
     return None
+
+
+# ------------------------------------------------------------ PD-array path
+#
+# The author: when there is no PLP, C3 can be entered off a PD array instead.
+# Price stabs into a fresh order block or FVG and Model #1 runs as usual.
+#   daily CRT -> a 4H OB / FVG
+#   4H CRT    -> a 1H or 15M OB / FVG
+# It must exist before the C3 mark (midnight NY for a daily C3), preferably
+# formed during C2, and it must be fresh: not traded into before the mark.
+
+PD_ARRAY_TFS = {
+    Timeframe.D1: (Timeframe.H4,),
+    Timeframe.H4: (Timeframe.H1, Timeframe.M15),
+}
+
+
+def known_index(level: Level) -> int:
+    """Bar index at whose CLOSE the level became knowable.
+
+    An FVG is complete when its third bar closes (that bar is created_index).
+    An order block is only an order block once the displacement after it has
+    closed — that bar is the one to wait for, not the candle itself.
+    """
+    if level.type is LevelType.ORDER_BLOCK:
+        return int(level.meta.get("displacement_index", level.created_index))
+    return level.created_index
+
+
+def fresh_pd_array(levels: List[Level], tf_bars: dict, crt_tf: Timeframe,
+                   bias: Direction, mark_ts: int,
+                   max_age_bars: int = 48) -> Optional[Level]:
+    """The nearest fresh PD array beyond price at the C3 mark, or None.
+
+    Bullish: a bullish FVG / OB, fully known before `mark_ts`, that no bar
+    traded down into between its completion and the mark. Of those, the one
+    with the highest top — the first price would reach.
+    """
+    long = bias is Direction.BULLISH
+    best = None
+    for l in levels:
+        if l.timeframe not in PD_ARRAY_TFS.get(crt_tf, ()):
+            continue
+        if l.type not in (LevelType.FVG, LevelType.ORDER_BLOCK):
+            continue
+        if l.direction is not bias:
+            continue
+        bars = tf_bars[l.timeframe]
+        k = known_index(l)
+        if k >= len(bars) or bars[k].ts + l.timeframe.seconds > mark_ts:
+            continue
+        # Same reach as the PLP search `[D]`: an array older than this many
+        # bars on its own timeframe is not "the one C2 built".
+        now = bisect_left(bars, mark_ts, key=lambda b: b.ts)
+        if k < now - max_age_bars:
+            continue
+        fresh = True
+        for j in range(k + 1, len(bars)):
+            b = bars[j]
+            if b.ts + l.timeframe.seconds > mark_ts:
+                break
+            if (b.low <= l.top) if long else (b.high >= l.bottom):
+                fresh = False
+                break
+        if not fresh:
+            continue
+        edge = l.top if long else l.bottom
+        if best is None or (edge > best.top if long else edge < best.bottom):
+            best = l
+    return best
+
+
+def stab_index(bars: List[Bar], level: Level, bias: Direction,
+               from_ts: int, until_ts: int) -> Optional[int]:
+    """First bar from `from_ts` that trades into the array, inside C3."""
+    long = bias is Direction.BULLISH
+    for i in range(bisect_left(bars, from_ts, key=lambda b: b.ts), len(bars)):
+        b = bars[i]
+        if b.ts >= until_ts:
+            return None
+        if (b.low <= level.top) if long else (b.high >= level.bottom):
+            return i
+    return None

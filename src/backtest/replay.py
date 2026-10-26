@@ -15,7 +15,8 @@ from ..core.bias import daily_bias, h1_profile, weekly_bias
 from ..core.confluence import LevelPool, mark_plp
 from ..core.entry import (
     MIN_RR_T1, STOP_BUFFER_PIPS, arm_time, c3_end, c3_tradeable,
-    entry_timeframe, pd_array_below, rr, sweep_index,
+    entry_timeframe, fresh_pd_array, pd_array_below, rr, stab_index,
+    sweep_index,
 )
 from ..core.sessions import build_asian_ranges, classify_break
 from ..core.types import Bar, Direction, Level, LevelType, Timeframe
@@ -39,6 +40,7 @@ class Setup:
     entry_tf: str = ""
     crt_tf: str = ""
     armed_ts: int = 0           # when the Model #1 trigger candle closed
+    via: str = ""               # "plp" | "pd_array"
 
     @property
     def score(self) -> int:
@@ -64,6 +66,7 @@ def find_setups(
     anchor_hour_utc: int = 21,
     fills: Optional[Fills] = None,
     diag: Optional[Dict[str, int]] = None,
+    trade_from_ts: Optional[int] = None,
 ) -> List[Setup]:
     """Model 1 (CRT) setups across the dataset.
 
@@ -89,7 +92,7 @@ def find_setups(
 
     # Pre-build the level pool once per timeframe; status is updated as we go.
     pool = LevelPool()
-    for tf in (Timeframe.H1, Timeframe.H4, Timeframe.D1):
+    for tf in (Timeframe.M15, Timeframe.H1, Timeframe.H4, Timeframe.D1):
         b = tfs[tf]
         if len(b) >= 25:
             pool.add(update_level_status(b, find_fvgs(b, tf)))
@@ -116,6 +119,8 @@ def find_setups(
             c3 = crt.c3_index
             if c3 < 2 or c3 >= len(tf_bars):
                 continue
+            if trade_from_ts is not None and crt.c3_ts < trade_from_ts:
+                continue   # history only: read, never traded
             drop("crts")
             c3_ts = crt.c3_ts
             if not c3_tradeable(crt_tf, c3_ts):
@@ -149,22 +154,35 @@ def find_setups(
                 drop("x_warmup")
                 continue
             plp = mark_plp(plp_bars, plp_sw, bias, as_of, plp_tf)
-            if not plp:
-                drop("x_no_plp")
-                continue
-            if not plp.is_taken or plp_bars[plp.taken_index].ts >= end_ts:
-                drop("x_plp_not_taken_in_c3")
-                continue
-
-            aligned = pool.near(plp.price, tolerance_pips=5.0, exclude_tf=plp_tf)
+            via, pd_level, aligned = "plp", None, []
+            if plp:
+                if not plp.is_taken or plp_bars[plp.taken_index].ts >= end_ts:
+                    drop("x_plp_not_taken_in_c3")
+                    continue
+                aligned = pool.near(plp.price, tolerance_pips=5.0,
+                                    exclude_tf=plp_tf)
+                pd = pd_array_below(pool.levels, plp.price, bias, arm_ts, pip) \
+                    if crt_tf is Timeframe.D1 else None
+                etf = entry_timeframe(crt_tf, pd is not None)
+                ebars = tfs[etf]
+                si = sweep_index(ebars, plp.price, bias,
+                                 max(arm_ts, plp_bars[plp.taken_index].ts))
+            else:
+                # No PLP: the author enters off a fresh PD array instead
+                # (4H for a daily CRT, 1H/15M for a 4H CRT).
+                pd_level = fresh_pd_array(pool.levels, tfs, crt_tf, bias, arm_ts)
+                if pd_level is None:
+                    drop("x_no_plp")
+                    continue
+                via = "pd_array"
+                etf = entry_timeframe(crt_tf, False)
+                ebars = tfs[etf]
+                si = stab_index(ebars, pd_level, bias, arm_ts, end_ts)
+                if si is None:
+                    drop("x_pd_not_reached_in_c3")
+                    continue
 
             # --- Model #1 on the entry timeframe, inside C3
-            pd = pd_array_below(pool.levels, plp.price, bias, arm_ts, pip) \
-                if crt_tf is Timeframe.D1 else None
-            etf = entry_timeframe(crt_tf, pd is not None)
-            ebars = tfs[etf]
-            si = sweep_index(ebars, plp.price, bias,
-                             max(arm_ts, plp_bars[plp.taken_index].ts))
             if si is None:
                 drop("x_no_model1")
                 continue
@@ -205,7 +223,7 @@ def find_setups(
             setups.append(Setup(
                 model="crt", direction=bias, trade=t, entry_index=start,
                 entry_mode=mode, entry_tf=etf.value, crt_tf=crt_tf.value,
-                armed_ts=m1.armed_ts,
+                armed_ts=m1.armed_ts, via=via,
                 conditions={
                     "weekly_bias": wb.tradeable and wb.direction is bias,
                     "daily_bias": db.tradeable and db.direction is bias,
@@ -213,7 +231,10 @@ def find_setups(
                     "correct_side_eq": True,
                     "target_exists": True,
                     "crt_present": True,
-                    "plp_taken": True,
+                    "plp_taken": via == "plp",
+                    "pd_array_entry": via == "pd_array",
+                    # "preferably formed during C2"
+                    "pd_in_c2": bool(pd_level) and pd_level.created_ts >= crt.c2_ts,
                     "plp_aligned": len(aligned) > 0,
                     "smt_confirmed": False,   # needs a second symbol
                     "model1_found": True,
@@ -289,7 +310,11 @@ def evaluate(
     ftr: Dict[str, int] = {}
     fte: Dict[str, int] = {}
     tr = find_setups(train_bars, anchor_hour_utc, fills, diag=ftr)
-    te = find_setups(test_bars, anchor_hour_utc, fills, diag=fte)
+    # The test period reads the training candles as HISTORY (swings, levels,
+    # bias), and only trades CRTs whose C3 opens inside it. Running it on its
+    # own lost its first weeks to warm-up. Train never sees test candles.
+    te = find_setups(bars_m5, anchor_hour_utc, fills, diag=fte,
+                     trade_from_ts=test_bars[0].ts if test_bars else None)
 
     tr = [s for s in tr if s.score >= min_score]
     te = [s for s in te if s.score >= min_score]
@@ -312,6 +337,8 @@ def evaluate(
     # Where CRTs fell out of the chain. Without this a low trade count reads
     # as "the strategy rarely fires" when it may be one rule eating them all.
     out["funnel"] = {"train": ftr, "test": fte}
+    out["entry_via"] = {
+        v: sum(1 for s in te if s.via == v) for v in ("plp", "pd_array")}
     out["entry_modes"] = {
         m: sum(1 for s in te if s.entry_mode == m) for m in ("close", "limit")}
     return out

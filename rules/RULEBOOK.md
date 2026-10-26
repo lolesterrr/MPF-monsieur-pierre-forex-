@@ -266,7 +266,24 @@ the author marks midnight). A 4H C3 is marked at its open, and only the
 lower probability and only ever traded as C3. All candles are cut on the New
 York clock, DST-aware (D1/W1 at 17:00 NY, 4H at 17/21/01/05/09/13 NY).
 
-**Entry timeframe** — searched only **after** the PLP is taken, and the
+**When there is no PLP — the PD-array entry.** C3 can be armed by price
+stabbing into a **fresh PD array** instead (it can also line up with a PLP):
+
+| CRT | PD array |
+|---|---|
+| Daily | a 4H order block or FVG |
+| 4H | a 1H or 15M order block or FVG |
+
+- Must be fully formed **before the C3 mark** (midnight NY for a daily C3),
+  preferably during C2 (recorded as `pd_in_c2`, not required). An order block
+  counts as formed once its displacement candle has closed.
+- **Fresh:** nothing traded into it between forming and the mark. Of the
+  fresh ones, the nearest to price (the first it would reach).
+- Looked for within the last `48` bars of its own timeframe `[D]`.
+- The stab must happen inside C3. Then Model #1 exactly as below, on 15M
+  (daily) or 5M (4H).
+
+**Entry timeframe** — searched only **after** the PLP is taken (or the PD array is stabbed), and the
 trigger must close **before C3 does**:
 
 | CRT | PLP on | Model #1 on |
