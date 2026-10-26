@@ -55,8 +55,9 @@ def mark_plp(
     Only swings CONFIRMED by as_of_index and not yet swept by then qualify.
 
     And not just any swing: the PLP is "a low that broke a high" (bullish) —
-    the low the rally started from, where that rally went on to close above
-    the swing high before it. Taking that low would look like a bearish MSS,
+    the low the rally started from, where that rally went on to take out
+    (a wick is enough) the swing high before it. When several qualify, the
+    most recent one is the PLP (author confirmed). Taking that low would look like a bearish MSS,
     which is exactly the trap. Bearish mirrors it. `require_mss=False` gives
     the old nearest-swing behaviour.
     """
@@ -101,7 +102,8 @@ def broke_structure(bars: List[Bar], swings: List[Swing], s: Swing,
     """Did the leg out of swing `s` break the opposing swing before it?
 
     Bullish (s is a low): take the most recent swing high formed before s.
-    Between s and `as_of_index`, a bar must CLOSE above that high, and price
+    Between s and `as_of_index`, a bar must trade above that high — a wick is
+    enough (author: "even a wick works") — and price
     must not trade below s first — otherwise the rally did not start from s.
     Bearish mirrors it. Only bars up to `as_of_index` are read.
     """
@@ -114,12 +116,12 @@ def broke_structure(bars: List[Bar], swings: List[Swing], s: Swing,
         if s.is_high:
             if b.high > s.price:
                 return False
-            if b.close < ref.price:
+            if b.low < ref.price:
                 return True
         else:
             if b.low < s.price:
                 return False
-            if b.close > ref.price:
+            if b.high > ref.price:
                 return True
     return False
 

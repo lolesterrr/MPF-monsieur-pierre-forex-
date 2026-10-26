@@ -227,15 +227,17 @@ C3's OHLC is never consulted either way. No lookahead.
 ## 6. PLP (pre-open liquidity pool)
 
 **Definition (from the author, Oct 2026):** the PLP is **a low that broke a
-high** — the low a rally started from, where that rally went on to **close
-above** the swing high before it (a bullish MSS). If price later trades back
+high** — the low a rally started from, where that rally went on to **take out**
+the swing high before it (a bullish MSS; **a wick is enough**). If price later trades back
 through that low it *looks* like a bearish MSS, which is the trap. Bearish
 mirrors it: a high that broke a low.
 
 - Bullish bias → that kind of swing low, below price
 - Bearish bias → that kind of swing high, above price
-- Only swings confirmed, and only breaks closed, **before the mark** count
-- Of the qualifying ones, the most recent wins
+- Only swings confirmed, and only breaks printed, **before the mark** count
+- It doesn't have to be the low the whole move started from: of the
+  qualifying lows, the **most recent** wins (author confirmed)
+- Breaking it would look like an MSS that then fails — an FMSS
 
 Tiers:
 

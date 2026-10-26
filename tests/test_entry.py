@@ -110,6 +110,26 @@ check("a low whose rally never broke the high is not a PLP",
       None)
 
 
+# The author: "even a wick works". A wick through the high, closing back
+# under it, still makes the low a PLP.
+wick = mss[:8] + [hb(8, 1.1052, 1.1030, 1.1040), hb(9, 1.1046, 1.1035),
+                  hb(10, 1.1044, 1.1036)]
+sw3 = mark_sweeps(wick, find_swings(wick))
+check("a wick through the high is enough",
+      (mark_plp(wick, sw3, Direction.BULLISH, as_of_index=10,
+                tf=Timeframe.H1) or type("x", (), {"price": None})).price,
+      1.1000)
+
+# Several qualifying lows: the most recent (L2 in the author's sketch) wins.
+two = mss + [hb(11, 1.1055, 1.1042), hb(12, 1.1050, 1.1038),
+             hb(13, 1.1058, 1.1043), hb(14, 1.1072, 1.1050),
+             hb(15, 1.1075, 1.1060), hb(16, 1.1074, 1.1062)]
+sw4 = mark_sweeps(two, find_swings(two))
+p4 = mark_plp(two, sw4, Direction.BULLISH, as_of_index=16, tf=Timeframe.H1)
+check("when several lows took out highs, the most recent is the PLP",
+      p4 and p4.price, 1.1038)
+
+
 print("\nRR rule: 2R to T1, at the close or at the limit")
 check("rr long", rr(1.1020, 1.1010, 1.1040, Direction.BULLISH), 2.0)
 check("rr short", round(rr(1.1000, 1.1010, 1.0970, Direction.BEARISH), 6), 3.0)
