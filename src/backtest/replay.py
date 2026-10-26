@@ -7,11 +7,16 @@ testable: each setup records which conditions were met, so you can ask
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from ..core.bias import daily_bias, h1_profile, weekly_bias
 from ..core.confluence import LevelPool, mark_plp
+from ..core.entry import (
+    MIN_RR_T1, STOP_BUFFER_PIPS, arm_time, c3_end, c3_tradeable,
+    entry_timeframe, pd_array_below, rr, sweep_index,
+)
 from ..core.sessions import build_asian_ranges, classify_break
 from ..core.types import Bar, Direction, Level, LevelType, Timeframe
 from ..data.feed import resample
@@ -30,6 +35,10 @@ class Setup:
     trade: Trade
     conditions: Dict[str, bool]
     entry_index: int
+    entry_mode: str = ""        # "close" | "limit"
+    entry_tf: str = ""
+    crt_tf: str = ""
+    armed_ts: int = 0           # when the Model #1 trigger candle closed
 
     @property
     def score(self) -> int:
@@ -54,6 +63,7 @@ def find_setups(
     bars_m5: List[Bar],
     anchor_hour_utc: int = 21,
     fills: Optional[Fills] = None,
+    diag: Optional[Dict[str, int]] = None,
 ) -> List[Setup]:
     """Model 1 (CRT) setups across the dataset.
 
@@ -86,6 +96,12 @@ def find_setups(
             pool.add(update_level_status(b, find_order_block_candidates(b, tf)))
             pool.add(_swing_levels(b, tf))
 
+    pip = fills.pip
+    funnel = diag if diag is not None else {}
+
+    def drop(reason: str) -> None:
+        funnel[reason] = funnel.get(reason, 0) + 1
+
     for crt_tf in (Timeframe.D1, Timeframe.H4):
         tf_bars = tfs[crt_tf]
         plp_tf = crt_tf.plp_tier or Timeframe.H1
@@ -93,70 +109,103 @@ def find_setups(
         plp_sw = mark_sweeps(plp_bars, find_swings(plp_bars))
 
         for crt in find_crts(tf_bars, crt_tf):
-            # --- bias as it stood when C3 opened (closed bars only)
             # A CRT whose C3 has not printed is the live one — real and
             # tradeable, but there is no C3 bar to replay, so a historical
             # run has nothing to measure. Skipping it is correct here and is
-            # NOT the same as hiding it from the dashboard, which is the
-            # mistake this used to make everywhere.
+            # NOT the same as hiding it from the dashboard.
             c3 = crt.c3_index
             if c3 < 2 or c3 >= len(tf_bars):
                 continue
+            drop("crts")
             c3_ts = crt.c3_ts
+            if not c3_tradeable(crt_tf, c3_ts):
+                drop("x_off_hours_4h")
+                continue
+            arm_ts = arm_time(crt_tf, c3_ts)
+            end_ts = c3_end(crt_tf, c3_ts)
 
+            # --- bias as it stood when C3 opened (closed bars only)
             wk_i = _last_closed(wk, c3_ts)
             dy_i = _last_closed(dy, c3_ts)
             if wk_i < 1 or dy_i < 1:
+                drop("x_warmup")
                 continue
 
             wb = weekly_bias(wk[wk_i - 1], wk[wk_i], wk_i)
             db = daily_bias(dy[dy_i - 1], dy[dy_i], dy_i)
             bias = wb.direction if wb.tradeable else db.direction
             if bias is Direction.NONE or crt.direction is not bias:
+                drop("x_bias")
                 continue
 
-            # --- 1H profile using only confirmed swings before C3
             seen = [s for s in h1_sw if s.confirmed_ts and s.confirmed_ts <= c3_ts]
             hp = h1_profile([s.price for s in seen if s.is_high],
                             [s.price for s in seen if not s.is_high])
 
-            # --- PLP on the lower tier
-            as_of = _last_closed(plp_bars, c3_ts)
+            # --- PLP on the tier below, marked against C3's mark (00:00 NY
+            # for a daily C3), and it has to be taken inside C3.
+            as_of = _last_closed(plp_bars, arm_ts)
             if as_of < 5:
+                drop("x_warmup")
                 continue
             plp = mark_plp(plp_bars, plp_sw, bias, as_of, plp_tf)
-            if not plp or not plp.is_taken:
+            if not plp:
+                drop("x_no_plp")
+                continue
+            if not plp.is_taken or plp_bars[plp.taken_index].ts >= end_ts:
+                drop("x_plp_not_taken_in_c3")
                 continue
 
             aligned = pool.near(plp.price, tolerance_pips=5.0, exclude_tf=plp_tf)
 
-            # --- Model #1 after the PLP was taken
-            m1 = find_model1(plp_bars, bias, plp.taken_index, plp_tf)
+            # --- Model #1 on the entry timeframe, inside C3
+            pd = pd_array_below(pool.levels, plp.price, bias, arm_ts, pip) \
+                if crt_tf is Timeframe.D1 else None
+            etf = entry_timeframe(crt_tf, pd is not None)
+            ebars = tfs[etf]
+            si = sweep_index(ebars, plp.price, bias,
+                             max(arm_ts, plp_bars[plp.taken_index].ts))
+            if si is None:
+                drop("x_no_model1")
+                continue
+            m1 = find_model1(ebars, bias, si, etf,
+                             stop_buffer=STOP_BUFFER_PIPS * pip, until_ts=end_ts)
             if not m1:
+                drop("x_no_model1")
                 continue
 
-            # --- the trade, with the doc's exits
-            t = Trade(
-                direction=bias,
-                entry_ts=plp_bars[m1.trigger_index].ts,
-                entry=m1.entry, stop=m1.stop,
-                t1=crt.eq, t2=crt.opposing,
-            )
-            # A target already behind price is not a target.
-            if bias is Direction.BULLISH and not (t.t1 > t.entry and t.t2 > t.entry):
-                continue
-            if bias is Direction.BEARISH and not (t.t1 < t.entry and t.t2 < t.entry):
-                continue
-            if t.risk <= 0:
+            t1, t2 = crt.eq, crt.opposing
+            # Nothing happens before the trigger candle has CLOSED.
+            armed = _index_at_or_after(bars_m5, m1.armed_ts)
+            if armed is None:
+                drop("x_warmup")
                 continue
 
-            start = _index_after(bars_m5, t.entry_ts)
-            if start is None:
+            if rr(m1.trigger_close, m1.stop, t1, bias) >= MIN_RR_T1:
+                mode, entry, start = "close", m1.trigger_close, armed
+            elif rr(m1.entry, m1.stop, t1, bias) >= MIN_RR_T1:
+                mode, entry = "limit", m1.entry
+                start = _limit_fill(bars_m5, armed, entry, t1, bias, end_ts)
+                if start is None:
+                    drop("x_limit_unfilled")
+                    continue
+            else:
+                drop("x_rr_below_2")
                 continue
+
+            t = Trade(direction=bias, entry_ts=bars_m5[start].ts,
+                      entry=entry, stop=m1.stop, t1=t1, t2=t2)
+            if rr(entry, t.stop, t2, bias) <= 0 or t.risk <= 0:
+                drop("x_rr_below_2")
+                continue
+
             simulate(t, bars_m5, start, fills)
+            drop("traded")
 
             setups.append(Setup(
                 model="crt", direction=bias, trade=t, entry_index=start,
+                entry_mode=mode, entry_tf=etf.value, crt_tf=crt_tf.value,
+                armed_ts=m1.armed_ts,
                 conditions={
                     "weekly_bias": wb.tradeable and wb.direction is bias,
                     "daily_bias": db.tradeable and db.direction is bias,
@@ -189,9 +238,34 @@ def _last_closed(bars: List[Bar], ts: int) -> int:
 
 
 def _index_after(bars: List[Bar], ts: int) -> Optional[int]:
-    for i, b in enumerate(bars):
-        if b.ts > ts:
+    i = bisect_right(bars, ts, key=lambda b: b.ts)
+    return i if i < len(bars) else None
+
+
+def _index_at_or_after(bars: List[Bar], ts: int) -> Optional[int]:
+    i = bisect_left(bars, ts, key=lambda b: b.ts)
+    return i if i < len(bars) else None
+
+
+def _limit_fill(bars: List[Bar], start: int, entry: float, t1: float,
+                bias: Direction, expires_ts: int) -> Optional[int]:
+    """Index of the 5m bar where a resting limit fills, or None.
+
+    Cancelled if price reaches T1 first (the move left without you) or C3
+    closes unfilled. A bar that touches both T1 and the entry is treated as
+    a fill — the worse assumption, since the simulation then starts on it
+    and applies stop-first.
+    """
+    long = bias is Direction.BULLISH
+    for i in range(start, len(bars)):
+        b = bars[i]
+        if b.ts >= expires_ts:
+            return None
+        touched = b.low <= entry if long else b.high >= entry
+        if touched:
             return i
+        if (b.high >= t1) if long else (b.low <= t1):
+            return None
     return None
 
 
@@ -212,8 +286,10 @@ def evaluate(
     fills = fills or Fills()
     train_bars, test_bars = split(bars_m5, train_frac)
 
-    tr = find_setups(train_bars, anchor_hour_utc, fills)
-    te = find_setups(test_bars, anchor_hour_utc, fills)
+    ftr: Dict[str, int] = {}
+    fte: Dict[str, int] = {}
+    tr = find_setups(train_bars, anchor_hour_utc, fills, diag=ftr)
+    te = find_setups(test_bars, anchor_hour_utc, fills, diag=fte)
 
     tr = [s for s in tr if s.score >= min_score]
     te = [s for s in te if s.score >= min_score]
@@ -233,6 +309,11 @@ def evaluate(
         "test": _range(test_bars),
     }
     out["by_condition"] = _condition_breakdown(te)
+    # Where CRTs fell out of the chain. Without this a low trade count reads
+    # as "the strategy rarely fires" when it may be one rule eating them all.
+    out["funnel"] = {"train": ftr, "test": fte}
+    out["entry_modes"] = {
+        m: sum(1 for s in te if s.entry_mode == m) for m in ("close", "limit")}
     return out
 
 

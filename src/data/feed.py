@@ -10,9 +10,14 @@ from __future__ import annotations
 import csv
 import random
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List
+from functools import lru_cache
+from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from ..core.types import Bar, Timeframe
+
+_NY = ZoneInfo("America/New_York")
+_UTC = ZoneInfo("UTC")
 
 TF_SECONDS: Dict[Timeframe, int] = {
     Timeframe.M5: 300,
@@ -58,12 +63,19 @@ def load_csv(path: str) -> List[Bar]:
 
 
 def resample(bars: List[Bar], target: Timeframe,
-             anchor_hour_utc: int = 21) -> List[Bar]:
-    """Aggregate lower-timeframe bars upward.
+             anchor_hour_utc: Optional[int] = None) -> List[Bar]:
+    """Aggregate lower-timeframe bars upward, on the New York clock.
 
-    `anchor_hour_utc` is the daily/weekly open (Rulebook §0: 17:00 New York,
-    which is 21:00 or 22:00 UTC depending on DST — pass the right one, or use
-    pre-aggregated daily bars from your feed and skip this).
+    D1, W1 and H4 are cut on New York time, the way the strategy reads them:
+    the day and the week open at 17:00 NY (Rulebook §0), and 4H candles open
+    at 17/21/01/05/09/13 NY. That grid is DST-aware, so a winter day opens at
+    22:00 UTC and a summer day at 21:00 UTC.
+
+    The old version took one fixed `anchor_hour_utc` (21) and cut 4H candles
+    on UTC hours. The daily candles were therefore an hour wrong for half the
+    year, and every 4H candle sat 1-2 hours off the NY grid, so the
+    1am/5am/9am 4H filter could not be applied at all. `anchor_hour_utc` is
+    still accepted so old callers do not break, and is ignored.
 
     Only the last bucket may be incomplete; it is dropped, because a live
     forming bar is not a closed bar and bias rules need closed bars.
@@ -72,12 +84,14 @@ def resample(bars: List[Bar], target: Timeframe,
         return []
 
     secs = TF_SECONDS[target]
-    offset = (anchor_hour_utc * 3600) % secs if target in (
-        Timeframe.D1, Timeframe.W1) else 0
+    ny_grid = target in (Timeframe.H4, Timeframe.D1, Timeframe.W1)
 
     buckets: Dict[int, List[Bar]] = {}
     for b in bars:
-        key = ((b.ts - offset) // secs) * secs + offset
+        if ny_grid:
+            key = _ny_bucket(b.ts, target)
+        else:
+            key = (b.ts // secs) * secs
         buckets.setdefault(key, []).append(b)
 
     out: List[Bar] = []
@@ -92,12 +106,58 @@ def resample(bars: List[Bar], target: Timeframe,
             volume=sum(g.volume for g in group),
         ))
 
-    # Drop a trailing partial bucket.
-    if out and bars[-1].ts < out[-1].ts + secs - TF_SECONDS.get(
-            _infer_tf(bars), 60):
-        out.pop()
+    # Drop a trailing partial bucket. For the NY grid the bucket's end is the
+    # next bucket boundary, worked out on the NY clock; a W1 bucket ends at
+    # Friday 17:00 NY, which is when the last bar of the week closes.
+    last = bars[-1].ts + TF_SECONDS.get(_infer_tf(bars), 60)
+    if out:
+        end = (_ny_bucket_end(out[-1].ts, target) if ny_grid
+               else out[-1].ts + secs)
+        if last < end:
+            out.pop()
 
     return out
+
+
+_DAY_OPEN_NY = 17          # the forex day and week open, Rulebook §0
+
+
+def _ny_offset(ts: int) -> int:
+    """Seconds New York is ahead of UTC at `ts` (negative: -4h or -5h)."""
+    return _ny_offset_hour(ts // 3600)
+
+
+@lru_cache(maxsize=65536)
+def _ny_offset_hour(hour: int) -> int:
+    d = datetime.fromtimestamp(hour * 3600, tz=_UTC).astimezone(_NY)
+    return int(d.utcoffset().total_seconds())
+
+
+def _ny_bucket(ts: int, tf: Timeframe) -> int:
+    """UTC open of the NY-clock bucket holding `ts`.
+
+    Shift into 'NY time minus 17h', where every forex day starts at 00:00,
+    floor there, and shift back. DST changes happen at 02:00 on a Sunday,
+    while the market is shut, so the offset is constant inside any bucket.
+    """
+    off = _ny_offset(ts)
+    shift = off - _DAY_OPEN_NY * 3600
+    local = ts + shift
+    if tf is Timeframe.W1:
+        # Day 0 of the epoch is a Thursday; shifted, the week starts Sunday
+        # (day 3), which is Sunday 17:00 NY in real time.
+        week, sun = 7 * 86400, 3 * 86400
+        key = ((local - sun) // week) * week + sun
+    else:
+        span = TF_SECONDS[tf]
+        key = (local // span) * span
+    return key - shift
+
+
+def _ny_bucket_end(open_ts: int, tf: Timeframe) -> int:
+    if tf is Timeframe.W1:
+        return open_ts + 5 * 86400    # Sunday 17:00 -> Friday 17:00 NY
+    return open_ts + TF_SECONDS[tf]
 
 
 def _infer_tf(bars: List[Bar]) -> Timeframe:

@@ -48,12 +48,14 @@ bars = [
 ]
 sw = mark_sweeps(bars, find_swings(bars, n=2))
 
-plp = mark_plp(bars, sw, Direction.BEARISH, as_of_index=6, tf=Timeframe.H1)
+plp = mark_plp(bars, sw, Direction.BEARISH, as_of_index=6, tf=Timeframe.H1,
+               require_mss=False)
 check("bearish bias picks a swing HIGH", plp is not None and plp.price, 1.0060)
 check("and sees it taken later", plp.taken_index, 7)
 
 check("bullish bias wants a swing low, none unswept here",
-      mark_plp(bars, sw, Direction.BULLISH, as_of_index=6, tf=Timeframe.H1) is None,
+      mark_plp(bars, sw, Direction.BULLISH, as_of_index=6, tf=Timeframe.H1,
+               require_mss=False) is None,
       True)
 check("no bias -> no PLP",
       mark_plp(bars, sw, Direction.NONE, as_of_index=6, tf=Timeframe.H1), None)
@@ -61,7 +63,8 @@ check("no bias -> no PLP",
 print("\nPLP respects confirmation lag (no lookahead)")
 # At index 4 the swing at 3 is not yet confirmed (confirms at 5).
 check("unconfirmed swing is not offered",
-      mark_plp(bars, sw, Direction.BEARISH, as_of_index=4, tf=Timeframe.H1), None)
+      mark_plp(bars, sw, Direction.BEARISH, as_of_index=4, tf=Timeframe.H1,
+               require_mss=False), None)
 
 print("\nlevel pool")
 pool = LevelPool().add([

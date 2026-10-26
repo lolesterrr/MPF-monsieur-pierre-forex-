@@ -226,38 +226,90 @@ C3's OHLC is never consulted either way. No lookahead.
 
 ## 6. PLP (pre-open liquidity pool)
 
-> Your doc defines PLP by *outcome* ("looks like a structure shift but is fake"),
-> which is only knowable after the fact. Code needs a *before* definition.
+**Definition (from the author, Oct 2026):** the PLP is **a low that broke a
+high** — the low a rally started from, where that rally went on to **close
+above** the swing high before it (a bullish MSS). If price later trades back
+through that low it *looks* like a bearish MSS, which is the trap. Bearish
+mirrors it: a high that broke a low.
 
-**Working definition `[D]`:** the most recent **unswept confirmed swing** on the
-PLP timeframe, on the side opposite the bias, formed before C3 opens.
+- Bullish bias → that kind of swing low, below price
+- Bearish bias → that kind of swing high, above price
+- Only swings confirmed, and only breaks closed, **before the mark** count
+- Of the qualifying ones, the most recent wins
 
-- Bearish bias → the nearest unswept **swing high** *above* current price
-- Bullish bias → the nearest unswept **swing low** *below* current price
+Tiers:
 
-**PLP taken:** price trades through it (wick is enough).
+| Layer | PLP chart | Marked before |
+|---|---|---|
+| Weekly (gates CRT hunting) | 4H | the weekly open, Sun 17:00 NY |
+| Daily CRT, C3 entry | 1H | **00:00 NY** of the C3 day |
+| 4H CRT, C3 entry | 15M | the C3 candle's open |
 
-Marked at C3 open. If no qualifying swing exists in the last `48` PLP bars `[D]`,
-no PLP → no setup.
+**PLP taken:** price trades through it (wick is enough), **inside C3**.
+
+If no qualifying swing exists in the last `48` PLP bars `[D]`, no PLP → no setup.
+
+The old working definition (nearest unswept swing) is still available as
+`mark_plp(..., require_mss=False)` for comparison.
 
 ---
 
 ## 7. Model #1 (entry trigger)
 
-Searched on the **PLP timeframe**, only **after** the PLP has been taken.
+All from the author's answers, Oct 2026.
 
-**Bearish:**
-1. Find the last bar that is **up-close** (`close > open`) AND whose `high` exceeded
-   the previous bar's `high`
-2. Wait for a subsequent bar to **close below** that bar's `low`
-3. On that close → entry order at that bar's **low** `[D]` (limit, expecting retrace)
-4. Stop loss: above that bar's **high** `[D]`
+**Clock.** A daily C3 is marked at **00:00 NY** (the candle opens 17:00, but
+the author marks midnight). A 4H C3 is marked at its open, and only the
+**01:00, 05:00, 09:00 and 13:00 NY** 4H candles are traded as C3. 13:00 is
+lower probability and only ever traded as C3. All candles are cut on the New
+York clock, DST-aware (D1/W1 at 17:00 NY, 4H at 17/21/01/05/09/13 NY).
 
-**Bullish:** mirror — last down-close bar that took out a low; close above its high;
-entry at its high; stop below its low.
+**Entry timeframe** — searched only **after** the PLP is taken, and the
+trigger must close **before C3 does**:
 
-**Validity window `[D]`:** the entry level stays live until C3 closes (Model 1) or
-until the session's target/stop is hit (Model 2). Then it expires.
+| CRT | PLP on | Model #1 on |
+|---|---|---|
+| Daily | 1H | 15M — or 5M when a 1H PD array (FVG / OB) rests just below the PLP |
+| 4H | 15M | 5M (author also uses 3M; MPF data starts at 5M) |
+
+"Just below" `[D]`: within 20 pips beyond the PLP.
+
+**Bullish** (bearish mirrors):
+1. Track the **last down-close candle in the move up** out of the sweep. It is
+   often the candle that liquidates the PLP, but it doesn't have to be. There
+   is **no** lower-low requirement.
+2. Model #1 is armed when a later candle **closes above** that candle's high.
+3. **Stop:** below that candle's low, plus **2 pips** `[D]` (author leaves 1-3
+   for spread and stray wicks).
+4. **RR rule: T1 must be at least 2R. Always.**
+   - If entering at the trigger candle's close already gives ≥ 2R to T1,
+     enter there, at market.
+   - Otherwise place a **limit back at the Model #1 level** (the candle's
+     high), and take it only if *that* gives ≥ 2R.
+   - Neither → no trade.
+5. A resting limit is cancelled if price reaches T1 first, or when C3 closes.
+
+**Targets:** T1 = CRT 50% (60% closed), T2 = the CRT's opposite extreme (40%).
+No breakeven.
+
+**Nothing happens before the trigger candle has closed.** The backtest's first
+bar is the one after the trigger closes (it used to start 5 minutes into the
+trigger candle — see the regression in tests/test_entry.py).
+
+### 7.1 Not yet implemented (author's rules, recorded so they are not lost)
+
+- **Weekly draw is a bias window, not a take-profit.** The daily targets (an
+  old high to the left that isn't freshly made; or an opposing PD array) mean
+  "bullish until there": keep hunting 4H / 1D CRTs in that direction until it
+  is reached or the bias is invalidated.
+- **Invalidation.** A **1D PD array being disrespected** (e.g. bullish and a
+  1D OB fails) flips the bias, or means sit out — you don't need to wait for
+  the PLP to break. The PLP breaking adds to the invalidation.
+- **SMT is not a gate.** No SMT → lower confidence, still tradeable. SMT
+  failing *during* the trade is an **exit trigger**, and the failure usually
+  shows in the **rejection block**: the wick of C1 (read on the 1H for a daily
+  CRT, the 15M for a 4H CRT). Needs DXY / GBPUSD bars.
+- **C2 entries** are allowed; C3 is higher probability. Only C3 is modelled.
 
 ---
 

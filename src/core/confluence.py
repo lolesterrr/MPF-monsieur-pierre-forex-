@@ -45,6 +45,7 @@ def mark_plp(
     as_of_index: int,
     tf: Timeframe,
     max_lookback: int = 48,
+    require_mss: bool = True,
 ) -> Optional[PLP]:
     """Pick the PLP at `as_of_index` (normally the bar C3 opens on).
 
@@ -52,6 +53,12 @@ def mark_plp(
     Bullish bias -> price should reach DOWN for a swing low first, then rise.
 
     Only swings CONFIRMED by as_of_index and not yet swept by then qualify.
+
+    And not just any swing: the PLP is "a low that broke a high" (bullish) —
+    the low the rally started from, where that rally went on to close above
+    the swing high before it. Taking that low would look like a bearish MSS,
+    which is exactly the trap. Bearish mirrors it. `require_mss=False` gives
+    the old nearest-swing behaviour.
     """
     if bias is Direction.NONE or as_of_index >= len(bars):
         return None
@@ -66,6 +73,7 @@ def mark_plp(
         and floor_index <= s.index
         and s.confirmed_index <= as_of_index
         and (s.swept_index is None or s.swept_index > as_of_index)
+        and (not require_mss or broke_structure(bars, swings, s, as_of_index))
     ]
     if not candidates:
         return None
@@ -86,6 +94,34 @@ def mark_plp(
         price=chosen.price, swing_index=chosen.index, swing_ts=chosen.ts,
         timeframe=tf, direction=bias, taken_index=taken,
     )
+
+
+def broke_structure(bars: List[Bar], swings: List[Swing], s: Swing,
+                    as_of_index: int) -> bool:
+    """Did the leg out of swing `s` break the opposing swing before it?
+
+    Bullish (s is a low): take the most recent swing high formed before s.
+    Between s and `as_of_index`, a bar must CLOSE above that high, and price
+    must not trade below s first — otherwise the rally did not start from s.
+    Bearish mirrors it. Only bars up to `as_of_index` are read.
+    """
+    prior = [o for o in swings if o.is_high != s.is_high and o.index < s.index]
+    if not prior:
+        return False
+    ref = max(prior, key=lambda o: o.index)
+    for j in range(s.index + 1, min(as_of_index, len(bars) - 1) + 1):
+        b = bars[j]
+        if s.is_high:
+            if b.high > s.price:
+                return False
+            if b.close < ref.price:
+                return True
+        else:
+            if b.low < s.price:
+                return False
+            if b.close > ref.price:
+                return True
+    return False
 
 
 # ---------------------------------------------------------------- level pool

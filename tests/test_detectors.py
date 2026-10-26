@@ -164,17 +164,47 @@ check("...it opens Sunday, not Saturday",
       datetime.fromtimestamp(wkc[0].c3_ts, UTC).strftime("%a"), "Sun")
 
 print("\nModel #1")
+# Bearish: PLP taken at bar 1 (an up-close bar). Bar 2 closes below its low.
 m1_bars = [
     b(0, 1.0000, 1.0010, 0.9990, 1.0005),
-    b(1, 1.0005, 1.0030, 1.0000, 1.0025),   # up-close, took out bar0 high
+    b(1, 1.0005, 1.0030, 1.0000, 1.0025),   # up-close, the last one up
     b(2, 1.0025, 1.0028, 0.9995, 0.9998),   # closes below bar1 low -> armed
 ]
-m1 = find_model1(m1_bars, Direction.BEARISH, search_from=2, tf=Timeframe.H1)
+m1 = find_model1(m1_bars, Direction.BEARISH, search_from=1, tf=Timeframe.H1)
 check("setup found", m1 is not None, True)
 check("origin candle", m1.candle_index, 1)
-check("entry at its low", m1.entry, 1.0000)
+check("limit level at its low", m1.entry, 1.0000)
 check("stop above its high", m1.stop, 1.0030)
 check("risk in pips", round(m1.risk / 0.0001, 1), 30.0)
+check("market entry is the trigger's close", m1.trigger_close, 0.9998)
+check("nothing is armed until the trigger candle has CLOSED",
+      m1.armed_ts, m1_bars[2].ts + 3600)
+
+m1b = find_model1(m1_bars, Direction.BEARISH, search_from=1, tf=Timeframe.H1,
+                  stop_buffer=0.0002)
+check("stop buffer sits beyond the candle (author: 1-3 pips)",
+      round(m1b.stop, 5), 1.0032)
+
+# Candles before the PLP was taken belong to the move INTO it.
+check("an origin candle before the sweep is not used",
+      find_model1(m1_bars, Direction.BEARISH, search_from=2,
+                  tf=Timeframe.H1), None)
+
+# The author: "the last down-close candle in the move up — often the one that
+# liquidates the PLP, but it doesn't have to be." No lower-low requirement.
+bull = [
+    b(0, 1.0020, 1.0025, 1.0000, 1.0005),   # sweep bar, down-close
+    b(1, 1.0005, 1.0018, 1.0003, 1.0015),   # up
+    b(2, 1.0015, 1.0016, 1.0008, 1.0010),   # down-close, higher low: still counts
+    b(3, 1.0010, 1.0030, 1.0009, 1.0024),   # closes above bar2 high -> armed
+]
+mb = find_model1(bull, Direction.BULLISH, search_from=0, tf=Timeframe.H1)
+check("bullish: the LAST down-close candle, even with a higher low",
+      mb.candle_index, 2)
+check("...armed by bar 3's close", mb.trigger_index, 3)
+check("until_ts: a trigger that closes after C3 ends does not count",
+      find_model1(bull, Direction.BULLISH, search_from=0, tf=Timeframe.H1,
+                  until_ts=bull[3].ts), None)
 
 print("\nbias")
 pw = b(0, 1.0, 1.1000, 1.0800, 1.0900)

@@ -22,6 +22,10 @@ from .detectors.levels import (
     find_fvgs, find_order_block_candidates, update_level_status,
 )
 from .detectors.model1 import find_model1
+from .core.entry import (
+    MIN_RR_T1, STOP_BUFFER_PIPS, arm_time, c3_end, c3_tradeable,
+    entry_timeframe, pd_array_below, rr, sweep_index,
+)
 from .detectors.swings import find_swings, mark_sweeps
 
 
@@ -259,27 +263,53 @@ def run(bars_m5: List[Bar], anchor_hour_utc: int = 21,
     # ---- CRT (Rulebook §5) — most recent on D1, else H4
     crt = None
     for tf in (Timeframe.D1, Timeframe.H4):
-        found = find_crts(tfs[tf], tf, bias=bias)
+        found = [c for c in find_crts(tfs[tf], tf, bias=bias)
+                 if c3_tradeable(tf, c.c3_ts)]
         if found:
             crt = found[-1]
             break
 
     # ---- PLP + Model #1 (Rulebook §6, §7)
     plp = model1 = aligned = None
+    m1_plan: dict = {}
     if crt is not None:
         plp_tf = crt.timeframe.plp_tier or Timeframe.H1
         plp_bars = tfs[plp_tf]
         plp_sw = mark_sweeps(plp_bars, find_swings(plp_bars))
 
-        # Map the CRT's C3 open onto the lower tier.
+        # Mark the PLP against C3's clock: 00:00 NY for a daily C3, the
+        # candle's own open for a 4H one (Rulebook §7).
         c3_ts = crt.c3_ts
-        as_of = max(0, sum(1 for b in plp_bars if b.ts <= c3_ts) - 1)
+        arm_ts = arm_time(crt.timeframe, c3_ts)
+        as_of = max(0, sum(1 for b in plp_bars if b.ts < arm_ts) - 1)
 
         plp = mark_plp(plp_bars, plp_sw, bias, as_of, plp_tf)
         if plp:
             aligned = pool.near(plp.price, tolerance_pips=5.0, exclude_tf=plp_tf)
             if plp.is_taken:
-                model1 = find_model1(plp_bars, bias, plp.taken_index, plp_tf)
+                pd = pd_array_below(pool.levels, plp.price, bias, arm_ts,
+                                    pip_size(symbol)) \
+                    if crt.timeframe is Timeframe.D1 else None
+                etf = entry_timeframe(crt.timeframe, pd is not None)
+                ebars = tfs[etf]
+                si = sweep_index(ebars, plp.price, bias,
+                                 max(arm_ts, plp_bars[plp.taken_index].ts))
+                if si is not None:
+                    model1 = find_model1(
+                        ebars, bias, si, etf,
+                        stop_buffer=STOP_BUFFER_PIPS * pip_size(symbol),
+                        until_ts=c3_end(crt.timeframe, c3_ts))
+                if model1:
+                    rr_close = rr(model1.trigger_close, model1.stop, crt.eq, bias)
+                    rr_limit = rr(model1.entry, model1.stop, crt.eq, bias)
+                    m1_plan = {
+                        "rr_close": round(rr_close, 2),
+                        "rr_limit": round(rr_limit, 2),
+                        "mode": ("close" if rr_close >= MIN_RR_T1 else
+                                 "limit" if rr_limit >= MIN_RR_T1 else "skip"),
+                        "tf": etf.value,
+                        "pd_array_below": bool(pd),
+                    }
 
     # ---- Asian range (Rulebook §9)
     ranges = build_asian_ranges(bars_m5)
@@ -381,6 +411,8 @@ def run(bars_m5: List[Bar], anchor_hour_utc: int = 21,
             "entry": round(model1.entry, 5), "stop": round(model1.stop, 5),
             "risk_pips": round(model1.risk / 0.0001, 1),
             "direction": model1.direction.value, "ts": model1.candle_ts,
+            "trigger_close": round(model1.trigger_close, 5),
+            "tf": model1.timeframe.value, **m1_plan,
         } if model1 else None,
         "asia": {
             "date": asia.date_ny, "high": round(asia.high, 5),
