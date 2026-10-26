@@ -204,6 +204,7 @@ button.ghost.sm { font-size: 12px; padding: 2px 8px; }
 /* The one row on the list you can still act on. Everything else is a record
    of something that already happened. */
 /* backtest anatomy */
+.funnel tr.tr th, .funnel tr.tr td { font-weight: 600; }
 .anat { width: 100%; border-collapse: collapse; margin: 12px 0 4px;
   font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .anat th, .anat td { padding: 5px 8px; text-align: right; border-bottom: 2px solid var(--tone); }
@@ -890,6 +891,35 @@ function anatomy(tr, te) {
     ${row("out-of-sample", te)}</tbody></table>`;
 }
 
+/* Where CRTs fell out of the chain. A handful of trades can mean "the
+   strategy is picky" or "one rule is eating everything"; this tells which. */
+const FUNNEL = [
+  ["crts", "CRTs found"],
+  ["x_off_hours_4h", "4H C3 not at 1/5/9/13 NY"],
+  ["x_bias", "against the bias"],
+  ["x_no_plp", "no PLP before the mark"],
+  ["x_plp_not_taken_in_c3", "PLP not taken inside C3"],
+  ["x_no_model1", "no Model #1 inside C3"],
+  ["x_rr_below_2", "under 2R to T1"],
+  ["x_limit_unfilled", "limit never filled"],
+  ["x_warmup", "not enough history yet"],
+  ["traded", "traded"],
+];
+function funnel(d) {
+  const f = d.funnel;
+  if (!f || !f.train) return "";
+  const n = (o, k) => o[k] || 0;
+  const rows = FUNNEL
+    .filter(([k]) => n(f.train, k) || n(f.test, k))
+    .map(([k, label]) => `<tr class="${k === "traded" ? "tr" : ""}"><th>${label}</th>
+      <td>${n(f.train, k)}</td><td>${n(f.test, k)}</td></tr>`).join("");
+  const m = d.entry_modes || {};
+  return `<table class="anat funnel"><thead><tr><th>where setups dropped out</th>
+    <th>in-sample</th><th>out-of-sample</th></tr></thead><tbody>${rows}</tbody></table>` +
+    `<p class="btcav">Out-of-sample entries: ${m.close || 0} at the trigger close,
+     ${m.limit || 0} on a limit back at Model #1.</p>`;
+}
+
 function renderBacktest(d) {
   const t = d.test, tr = d.train;
   const chip = $("#btchip");
@@ -913,6 +943,7 @@ function renderBacktest(d) {
       cell("in-sample", tr.n + " @ " + tr.expectancy_r + "R") +
     `</div>` +
     anatomy(tr, t) +
+    funnel(d) +
     (d.notes.length
       ? `<ul class="btnotes">` + d.notes.map(n => `<li>${n}</li>`).join("") + `</ul>`
       : "") +
