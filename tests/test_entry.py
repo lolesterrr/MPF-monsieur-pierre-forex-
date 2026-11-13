@@ -206,5 +206,33 @@ check("every out-of-sample trade starts inside the test period",
       ev["test"]["n"] == sum(ev["entry_via"].values()), True)
 
 
+print("\nbias is read from CLOSED weeks and days only")
+# Midweek, the newest week that OPENED before C3 is still forming; reading it
+# meant the bias knew how the rest of the week closed. Spy on every read and
+# pair it with the C3 it was made for.
+import src.backtest.replay as rp                                     # noqa: E402
+reads, cur = [], {"c3": None}
+_wb, _db, _ct = rp.weekly_bias, rp.daily_bias, rp.c3_tradeable
+
+
+def spy_ct(tf, c3_ts):
+    cur["c3"] = c3_ts
+    return _ct(tf, c3_ts)
+
+
+rp.c3_tradeable = spy_ct
+rp.weekly_bias = lambda p, c, i: (reads.append(("w", c.ts, cur["c3"])), _wb(p, c, i))[1]
+rp.daily_bias = lambda p, c, i: (reads.append(("d", c.ts, cur["c3"])), _db(p, c, i))[1]
+try:
+    rp.find_setups(bars, fills=Fills(1.0, 0.2, "EURUSD"))
+finally:
+    rp.weekly_bias, rp.daily_bias, rp.c3_tradeable = _wb, _db, _ct
+
+span = {"w": 5 * 86400, "d": 86400}
+check("bias reads happened", len(reads) > 50, True)
+check("every week and day read had closed before its C3 opened",
+      [r for r in reads if r[1] + span[r[0]] > r[2]][:3], [])
+
+
 print(f"\n{PASS} passed, {FAIL} failed\n")
 sys.exit(1 if FAIL else 0)

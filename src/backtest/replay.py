@@ -130,8 +130,16 @@ def find_setups(
             end_ts = c3_end(crt_tf, c3_ts)
 
             # --- bias as it stood when C3 opened (closed bars only)
+            # Only CLOSED weeks and days. `_last_closed` returns the newest bar
+            # that OPENED before C3, which midweek is the week still forming —
+            # its high, low and close include days after C3. That was
+            # lookahead in every Tue-Fri bias read (and every 4H C3's daily).
             wk_i = _last_closed(wk, c3_ts)
+            if wk_i >= 0 and wk[wk_i].ts + 5 * 86400 > c3_ts:
+                wk_i -= 1
             dy_i = _last_closed(dy, c3_ts)
+            if dy_i >= 0 and dy[dy_i].ts + 86400 > c3_ts:
+                dy_i -= 1
             if wk_i < 1 or dy_i < 1:
                 drop("x_warmup")
                 continue

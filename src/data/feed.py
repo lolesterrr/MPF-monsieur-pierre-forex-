@@ -151,7 +151,13 @@ def _ny_bucket(ts: int, tf: Timeframe) -> int:
     else:
         span = TF_SECONDS[tf]
         key = (local // span) * span
-    return key - shift
+    # Convert back with the offset in force at the bucket's OPEN, not at this
+    # bar. Otherwise bars either side of a DST switch inside one bucket give
+    # it two different UTC keys. Real FX is shut at the switch (02:00 Sunday
+    # NY); continuous data is not.
+    guess = key - shift
+    open_shift = _ny_offset(guess) - _DAY_OPEN_NY * 3600
+    return key - open_shift
 
 
 def _ny_bucket_end(open_ts: int, tf: Timeframe) -> int:
